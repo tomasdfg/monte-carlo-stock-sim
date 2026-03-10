@@ -52,7 +52,19 @@ cursor.execute('''
 ''')
 conn.commit()
 
-file_age = datetime.today() - datetime.fromtimestamp(os.path.getmtime(f"data/{ticker}_data.csv"))
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS backtest_results (
+        ticker TEXT,
+        year INTEGER,
+        predicted_direction TEXT,
+        actual_direction TEXT,
+        probability_t REAL,
+        is_correct INTEGER,
+        today TEXT
+    )
+''')
+conn.commit()
+
 
 
 if os.path.exists(f"data/{ticker}_data.csv"):
@@ -148,7 +160,68 @@ cursor.execute('''
 ''', (ticker, beta, risk_free_rate, analyst_target, expected_return, today))
 conn.commit()
 
+correct = 0
+total = 0
 
+for year in range(2018, 2024):
+    training_data = closes[f"{year-2}-01-01":f"{year}-01-01"]
+    actual_data = closes[f"{year}-01-01":f"{year+1}-01-01"]
+    #calc MU and SIGMA from T-data:
+    log_returns_t = np.log(training_data / training_data.shift(1))
+    mu_calc_t = log_returns_t.mean() 
+    sigma_calc_t = log_returns_t.std() 
+    mu_annual_t = mu_calc_t * 252
+    sigma_annual_t = sigma_calc_t * np.sqrt(252)
+    # drift: blended 40% historical + 60% CAPM
+    mu_t = float(((mu_annual_t * 0.2) + (expected_return * 0.2) + (implied_return * 0.4)).values[0])
+    # volatility
+    sigma_t = sigma_annual_t.values[0]
+    # get starting price for year:
+    Starting_Price_t = float(actual_data.iloc[0].iloc[0])
+    # run Monte Carlo Sim:
+    # calc each time step
+    dt_t = T/n
+    # simulation using numpy arrays
+    St_t = np.exp(
+        (mu_t - sigma_t ** 2 / 2) * dt_t
+        + sigma_t * np.random.normal(0, np.sqrt(dt_t), size=(M,n)).T
+    )
+    # include array of 1's
+    St_t = np.vstack([np.ones(M), St_t])
+    # multiply through by S0 and return the cumulative product of elements along a given simulation path (axis=0)
+    St_t = Starting_Price_t * St_t.cumprod(axis=0)
+    median_t = np.percentile(St_t, 50, axis=1)
+    p5_t = np.percentile(St_t, 5, axis=1)
+    p95_t = np.percentile(St_t, 95, axis=1)
+    p25_t = np.percentile(St_t, 25, axis=1)
+    p75_t = np.percentile(St_t, 75, axis=1)
+    # define time interval correctly
+    time_t = np.linspace(0,T,n+1)
+    final_prices_t = St_t[-1]
+    # probability that price will be above "X"
+    probability_t = (final_prices_t > Starting_Price_t).mean()
+    probability3_t = (final_prices_t > 1.2 * Starting_Price_t).mean()
+    #check what actually happened:
+    actual_return = actual_data.iloc[-1] - actual_data.iloc[0]
+    predicted_direction = "UP" if probability_t > 0.5 else "DOWN"
+    actual_direction = "UP" if actual_return.iloc[0] > 0 else "DOWN"
+    is_correct = 1 if predicted_direction == actual_direction else 0
+
+    print(f"{year}: P(gain)={probability_t:.0%}, Actual={'UP' if actual_return.iloc[0] > 0 else 'DOWN'}")
+    if (probability_t > 0.5) and (actual_return.iloc[0] > 0):
+        correct +=1
+        total +=1
+    else:
+        total +=1
+    
+    cursor.execute('''
+        INSERT INTO backtest_results
+        (ticker, year, predicted_direction, actual_direction, probability_t, correct, today)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (ticker, year, predicted_direction, actual_direction, probability_t, is_correct, today))
+    conn.commit()
+print(f"Backtest accuracy: {correct}/{total} = {correct/total:.0%}")
+    
 
 # --- CHART ---
 # plot figure
