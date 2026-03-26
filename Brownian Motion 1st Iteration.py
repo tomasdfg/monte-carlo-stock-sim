@@ -160,6 +160,18 @@ cursor.execute('''
 ''', (ticker, beta, risk_free_rate, analyst_target, expected_return, today))
 conn.commit()
 
+# define a function that states how much to put in for each trade
+def position_size(probability):
+    if probability >= 0.80:
+        return 5000
+    elif probability >= 0.70:
+        return 1500
+    elif probability >= 0.63:
+        return 500
+    else:
+        return 0
+
+
 correct = 0
 total = 0
 
@@ -205,8 +217,10 @@ for year in range(2018, 2024):
     # probability that price will be above "X"
     probability_t = (final_prices_t > Starting_Price_t).mean()
     probability3_t = (final_prices_t > 1.2 * Starting_Price_t).mean()
+    #how much is put in for each trade
+    investment = position_size(probability_t)
     # strength confidence signal
-    print(f"{year}: P={probability_t:.0%}, MA={ma_signal_t}")
+    print(f"{year}: P={probability_t:.0%}, MA={ma_signal_t}, Investment=%{investment}")
     if (probability_t > 0.63) and (ma_signal_t == 'BUY'):
         print(f"{year}: Strong Buy")
     else:
@@ -226,24 +240,15 @@ for year in range(2018, 2024):
     
     cursor.execute('''
         INSERT INTO backtest_results
-        (ticker, year, predicted_direction, actual_direction, probability_t, correct, today)
+        (ticker, year, predicted_direction, actual_direction, probability_t, is_correct, today)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (ticker, year, predicted_direction, actual_direction, probability_t, is_correct, today))
     conn.commit()
 print(f"Backtest accuracy: {correct}/{total} = {correct/total:.0%}")
     
-ma_50 = closes.rolling(50).mean()
-ma_200 = closes.rolling(200).mean()
-print(ma_50.tail())
-print(ma_200.tail())
 
-ma_signal = "BUY" if ma_50.iloc[-1].iloc[0] > ma_200.iloc[-1].iloc[0] else "AVOID"
-print(ma_signal)
 
-if (probability_t > 0.75) and (ma_signal == 'BUY'):
-    print("Strong confirmation")
-else:
-    print("Less Confident")
+
 
 # --- CHART ---
 # plot figure
@@ -271,4 +276,4 @@ plt.text(0.02, 0.97, stats_text, transform=plt.gca().transAxes,
          verticalalignment='top', color='white',
          bbox=dict(boxstyle='round', facecolor='black', alpha=0.5))
 plt.legend(loc='lower right')
-plt.show()
+#plt.show()
