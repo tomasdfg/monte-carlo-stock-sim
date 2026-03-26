@@ -176,6 +176,10 @@ for year in range(2018, 2024):
     mu_t = float(((mu_annual_t * 0.2) + (expected_return * 0.2) + (implied_return * 0.4)).values[0])
     # volatility
     sigma_t = sigma_annual_t.values[0]
+    # calculate Moving Averages and Signal MA
+    ma_50_t = training_data.rolling(50).mean()
+    ma_200_t = training_data.rolling(200).mean()
+    ma_signal_t = "BUY" if ma_50_t.iloc[-1].iloc[0] > ma_200_t.iloc[-1].iloc[0] else "AVOID"
     # get starting price for year:
     Starting_Price_t = float(actual_data.iloc[0].iloc[0])
     # run Monte Carlo Sim:
@@ -201,6 +205,12 @@ for year in range(2018, 2024):
     # probability that price will be above "X"
     probability_t = (final_prices_t > Starting_Price_t).mean()
     probability3_t = (final_prices_t > 1.2 * Starting_Price_t).mean()
+    # strength confidence signal
+    print(f"{year}: P={probability_t:.0%}, MA={ma_signal_t}")
+    if (probability_t > 0.63) and (ma_signal_t == 'BUY'):
+        print(f"{year}: Strong Buy")
+    else:
+        print(f"{year}: No Trade")
     #check what actually happened:
     actual_return = actual_data.iloc[-1] - actual_data.iloc[0]
     predicted_direction = "UP" if probability_t > 0.5 else "DOWN"
@@ -222,6 +232,18 @@ for year in range(2018, 2024):
     conn.commit()
 print(f"Backtest accuracy: {correct}/{total} = {correct/total:.0%}")
     
+ma_50 = closes.rolling(50).mean()
+ma_200 = closes.rolling(200).mean()
+print(ma_50.tail())
+print(ma_200.tail())
+
+ma_signal = "BUY" if ma_50.iloc[-1].iloc[0] > ma_200.iloc[-1].iloc[0] else "AVOID"
+print(ma_signal)
+
+if (probability_t > 0.75) and (ma_signal == 'BUY'):
+    print("Strong confirmation")
+else:
+    print("Less Confident")
 
 # --- CHART ---
 # plot figure
