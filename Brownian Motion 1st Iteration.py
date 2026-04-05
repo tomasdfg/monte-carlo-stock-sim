@@ -174,6 +174,8 @@ def position_size(probability):
 
 correct = 0
 total = 0
+total_pnl = 0
+total_invested = 0
 
 for year in range(2018, 2024):
     training_data = closes[f"{year-2}-01-01":f"{year}-01-01"]
@@ -221,16 +223,27 @@ for year in range(2018, 2024):
     investment = position_size(probability_t)
     # strength confidence signal
     print(f"{year}: P={probability_t:.0%}, MA={ma_signal_t}, Investment=%{investment}")
+    actual_return = actual_data.iloc[-1] - actual_data.iloc[0]
     if (probability_t > 0.63) and (ma_signal_t == 'BUY'):
         print(f"{year}: Strong Buy")
+        # calculate take profit
+        take_profit_hit = np.any(actual_data > (Starting_Price_t * 1.2))
+        # calculate profit/loss in dollars
+        if take_profit_hit:
+            profit_loss = investment * 0.20
+        else:
+            profit_loss = investment * (actual_return.iloc[0] / Starting_Price_t)
+        total_pnl += profit_loss
+        total_invested += investment
+        print(f"{year}: Investment=${investment}, P&L=${profit_loss:.2f}")
+        print(f"Take profit hit: {take_profit_hit}")
     else:
         print(f"{year}: No Trade")
+
     #check what actually happened:
-    actual_return = actual_data.iloc[-1] - actual_data.iloc[0]
     predicted_direction = "UP" if probability_t > 0.5 else "DOWN"
     actual_direction = "UP" if actual_return.iloc[0] > 0 else "DOWN"
     is_correct = 1 if predicted_direction == actual_direction else 0
-
     print(f"{year}: P(gain)={probability_t:.0%}, Actual={'UP' if actual_return.iloc[0] > 0 else 'DOWN'}")
     if (probability_t > 0.5) and (actual_return.iloc[0] > 0):
         correct +=1
@@ -244,7 +257,17 @@ for year in range(2018, 2024):
         VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (ticker, year, predicted_direction, actual_direction, probability_t, is_correct, today))
     conn.commit()
+#calculating what the hold amount would be
+bh_start = closes["2018-01-01" : "2018-02-01"].iloc[0].iloc[0]
+bh_end = closes["2023-01-01" : "2024-01-01"].iloc[-1].iloc[0]
+p_gain_hold = (bh_end / bh_start) - 1
+print(f"Buy & Hold return (2018-2023): {p_gain_hold:.1%}")
+
 print(f"Backtest accuracy: {correct}/{total} = {correct/total:.0%}")
+print(f"/n--- STRATEGY SUMMARY ---")
+print(f"Total invested: ${total_invested}")
+print(f"Total P&L: ${total_pnl:.2f}")
+print(f"Total return: {(total_pnl/total_invested)*100:.1f}%" if total_invested > 0 else "No trades")
     
 
 
