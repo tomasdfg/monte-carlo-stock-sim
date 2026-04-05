@@ -176,6 +176,7 @@ correct = 0
 total = 0
 total_pnl = 0
 total_invested = 0
+yearly_returns = []
 
 for year in range(2018, 2024):
     training_data = closes[f"{year-2}-01-01":f"{year}-01-01"]
@@ -231,14 +232,17 @@ for year in range(2018, 2024):
         # calculate profit/loss in dollars
         if take_profit_hit:
             profit_loss = investment * 0.20
+            yearly_returns.append(0.20)
         else:
             profit_loss = investment * (actual_return.iloc[0] / Starting_Price_t)
+            yearly_returns.append(0)
         total_pnl += profit_loss
         total_invested += investment
         print(f"{year}: Investment=${investment}, P&L=${profit_loss:.2f}")
         print(f"Take profit hit: {take_profit_hit}")
     else:
         print(f"{year}: No Trade")
+        yearly_returns.append(0)
 
     #check what actually happened:
     predicted_direction = "UP" if probability_t > 0.5 else "DOWN"
@@ -261,14 +265,18 @@ for year in range(2018, 2024):
 bh_start = closes["2018-01-01" : "2018-02-01"].iloc[0].iloc[0]
 bh_end = closes["2023-01-01" : "2024-01-01"].iloc[-1].iloc[0]
 p_gain_hold = (bh_end / bh_start) - 1
-print(f"Buy & Hold return (2018-2023): {p_gain_hold:.1%}")
 
+# Sharpe Ratio Calculation
+Sharpe = (np.mean(yearly_returns) - risk_free_rate) / np.std(yearly_returns, ddof=1)    
+
+print(f"Sharpe Ratio: {Sharpe:.2f}")
+print(f"Buy & Hold return (2018-2023): {p_gain_hold:.1%}")
 print(f"Backtest accuracy: {correct}/{total} = {correct/total:.0%}")
 print(f"/n--- STRATEGY SUMMARY ---")
 print(f"Total invested: ${total_invested}")
 print(f"Total P&L: ${total_pnl:.2f}")
 print(f"Total return: {(total_pnl/total_invested)*100:.1f}%" if total_invested > 0 else "No trades")
-    
+
 
 
 
@@ -299,4 +307,4 @@ plt.text(0.02, 0.97, stats_text, transform=plt.gca().transAxes,
          verticalalignment='top', color='white',
          bbox=dict(boxstyle='round', facecolor='black', alpha=0.5))
 plt.legend(loc='lower right')
-#plt.show()
+plt.show()
