@@ -81,6 +81,8 @@ fig, axes = plt.subplots(2, 3, figsize=(20,7.25)) # Sets sizing but conflicts wi
 axes = axes.flatten() # converts 2D grid to a simple list
 plt.style.use("dark_background")
 
+all_returns = {} # this makes a dictionary to store all the returns from each ticker in one place
+
 for i, ticker in enumerate(tickers):
 
     if os.path.exists(f"data/{ticker}_data.csv"):
@@ -107,6 +109,7 @@ for i, ticker in enumerate(tickers):
 
     log_returns = np.log(closes / closes.shift(1))
     print(log_returns)
+    all_returns[ticker] = log_returns.squeeze()
 
     mu_calc = log_returns.mean() 
     sigma_calc = log_returns.std() 
@@ -317,9 +320,32 @@ for i, ticker in enumerate(tickers):
     axes[i].annotate(f"${S0:.1f}", xy=(0, S0), color='cyan', ha='right')
 
     stats_text = f"P(gain): {probability:.0%}\nP(+20%): {probability3:.0%}\nP(${price_target}): {probability2:.0%}"
-    axes[i].text(0.02, 0.97, stats_text, transform=plt.gca().transAxes,
+    axes[i].text(0.02, 0.97, stats_text, transform=axes[i].transAxes,
             verticalalignment='top', color='white',
             bbox=dict(boxstyle='round', facecolor='black', alpha=0.5))
     axes[i].legend(loc='lower right')
+
+returns_df = pd.DataFrame(all_returns) # converting the dictionary to DataFrame
+correlation_matrix = returns_df.corr() # calculating the correlation between the columns of the DataFrame
+print(correlation_matrix)
+
+# create heatmap for correlation between tickers
+fig2, ax = plt.subplots(figsize=(8,6))
+im = ax.imshow(correlation_matrix, cmap='RdYlGn')
+# label the Axis for the correlation plot
+ax.set_xticks(range(len(tickers)))
+ax.set_yticks(range(len(tickers)))
+ax.set_xticklabels(tickers)
+ax.set_yticklabels(tickers)
+ax.xaxis.set_label_position('top')
+ax.xaxis.tick_top()
+# setting the actual corelation numbers in the corelation heatmap
+for row in range(len(tickers)):     # loops through rows 0,1,2,3,4
+    for col in range(len (tickers)):    # for each row, loops through columns 0,1,2,3,4
+        ax.text(col, row, f"{correlation_matrix.iloc[row, col]:.3f}",
+                ha='center', va='center', color='black', fontweight='bold')
+ax.set_title("Portfolio Correlation Matrix", pad=20)
+plt.colorbar(im, ax=ax)
+
 plt.subplots_adjust(hspace=0.3, wspace=0.4) # manually setting spacing in between graphs
 plt.show()
