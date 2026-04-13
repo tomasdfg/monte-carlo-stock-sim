@@ -77,7 +77,7 @@ def position_size(probability):
         return 0
 
 plt.style.use("dark_background") # sets background to black
-fig, axes = plt.subplots(2, 3, figsize=(20,12))
+fig, axes = plt.subplots(2, 3, figsize=(20,7.25)) # Sets sizing but conflicts with plt.tight_layout()
 axes = axes.flatten() # converts 2D grid to a simple list
 plt.style.use("dark_background")
 
@@ -321,5 +321,5 @@ for i, ticker in enumerate(tickers):
             verticalalignment='top', color='white',
             bbox=dict(boxstyle='round', facecolor='black', alpha=0.5))
     axes[i].legend(loc='lower right')
-plt.tight_layout() # this auto adjusts spacing so no overlap
+plt.subplots_adjust(hspace=0.3, wspace=0.4) # manually setting spacing in between graphs
 plt.show()
