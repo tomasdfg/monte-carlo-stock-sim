@@ -83,6 +83,9 @@ plt.style.use("dark_background")
 
 all_returns = {} # this makes a dictionary to store all the returns from each ticker in one place
 
+portfolio_pnl = 0
+portfolio_invested = 0
+
 for i, ticker in enumerate(tickers):
 
     if os.path.exists(f"data/{ticker}_data.csv"):
@@ -192,6 +195,7 @@ for i, ticker in enumerate(tickers):
     total_pnl = 0
     total_invested = 0
     yearly_returns = []
+    
 
     for year in range(2018, 2024):
         training_data = closes[f"{year-2}-01-01":f"{year}-01-01"]
@@ -253,6 +257,8 @@ for i, ticker in enumerate(tickers):
                 yearly_returns.append(0)
             total_pnl += profit_loss
             total_invested += investment
+            portfolio_pnl += total_pnl
+            portfolio_invested += total_invested
             print(f"{year}: Investment=${investment}, P&L=${profit_loss:.2f}")
             print(f"Take profit hit: {take_profit_hit}")
         else:
@@ -328,6 +334,13 @@ for i, ticker in enumerate(tickers):
 returns_df = pd.DataFrame(all_returns) # converting the dictionary to DataFrame
 correlation_matrix = returns_df.corr() # calculating the correlation between the columns of the DataFrame
 print(correlation_matrix)
+
+print(f"/n{'='*40}")
+print(f"PORTFOLIO SUMMARY")
+print(f"{'='*40}")
+print(f"Total invested across all tickers: ${portfolio_invested}")
+print(f"Total P&L across all tickers: ${portfolio_pnl:.2f}")
+print(f"Total portfolio return: {(portfolio_pnl / portfolio_invested) * 100:.1f}%" if portfolio_invested > 0 else "No trades")
 
 # create heatmap for correlation between tickers
 fig2, ax = plt.subplots(figsize=(8,6))
