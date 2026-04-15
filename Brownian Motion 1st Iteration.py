@@ -335,6 +335,16 @@ returns_df = pd.DataFrame(all_returns) # converting the dictionary to DataFrame
 correlation_matrix = returns_df.corr() # calculating the correlation between the columns of the DataFrame
 print(correlation_matrix)
 
+avg_correlation = {}
+for ticker in tickers:
+    row = correlation_matrix[ticker]
+    avg_correlation[ticker] = row.drop(ticker).mean()
+print(f" average correlation is {avg_correlation}")
+multiplier = {}
+for ticker in tickers:
+    multiplier[ticker] = 1 - avg_correlation[ticker]
+print(multiplier)
+
 print(f"/n{'='*40}")
 print(f"PORTFOLIO SUMMARY")
 print(f"{'='*40}")
