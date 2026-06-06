@@ -82,12 +82,10 @@ axes = axes.flatten() # converts 2D grid to a simple list
 plt.style.use("dark_background")
 
 all_returns = {} # this makes a dictionary to store all the returns from each ticker in one place
+all_closes = {}
 
-portfolio_pnl = 0
-portfolio_invested = 0
-
-for i, ticker in enumerate(tickers):
-
+##### PASS 1 #####
+for ticker in tickers:
     if os.path.exists(f"data/{ticker}_data.csv"):
         file_age = datetime.today() - datetime.fromtimestamp(os.path.getmtime(f"data/{ticker}_data.csv"))
     else:
@@ -105,14 +103,36 @@ for i, ticker in enumerate(tickers):
     data.to_sql("prices", conn, if_exists="replace", index=True)
 
     closes = data["Close"]
-    print(closes)
-
-    # initial stock price
-    S0 = float(closes.iloc[-1].iloc[0])
+    all_closes[ticker] = closes
 
     log_returns = np.log(closes / closes.shift(1))
     print(log_returns)
     all_returns[ticker] = log_returns.squeeze()
+
+portfolio_pnl = 0
+portfolio_invested = 0
+
+# Multiplier calculations
+returns_df = pd.DataFrame(all_returns) # converting the dictionary to DataFrame
+correlation_matrix = returns_df.corr() # calculating the correlation between the columns of the DataFrame
+print(correlation_matrix)
+
+avg_correlation = {}
+for ticker in tickers:
+    row = correlation_matrix[ticker]
+    avg_correlation[ticker] = row.drop(ticker).mean()
+print(f" average correlation is {avg_correlation}")
+multiplier = {}
+for ticker in tickers:
+    multiplier[ticker] = 1 - avg_correlation[ticker]
+print(multiplier)
+
+##### PASS 2 #####
+for i, ticker in enumerate(tickers):
+
+    closes = all_closes[ticker]
+    log_returns = all_returns[ticker]
+    S0 = float(closes.iloc[-1].iloc[0])
 
     mu_calc = log_returns.mean() 
     sigma_calc = log_returns.std() 
@@ -142,10 +162,10 @@ for i, ticker in enumerate(tickers):
 
     # --- MU & SIGMA ESTIMATION ---
     # drift: blended 40% historical + 60% CAPM
-    mu = float(((mu_annual * 0.2) + (expected_return * 0.2) + (implied_return * 0.4)).values[0])
+    mu = float(((mu_annual * 0.2) + (expected_return * 0.2) + (implied_return * 0.4)))
     print(f"Blended mu: {mu:.2%}")
     # volatility
-    sigma = sigma_annual.values[0]
+    sigma = sigma_annual
 
     # --- MONTE CARLO SIMULATION ---
     # calc each time step
@@ -207,9 +227,9 @@ for i, ticker in enumerate(tickers):
         mu_annual_t = mu_calc_t * 252
         sigma_annual_t = sigma_calc_t * np.sqrt(252)
         # drift: blended 40% historical + 60% CAPM
-        mu_t = float(((mu_annual_t * 0.2) + (expected_return * 0.2) + (implied_return * 0.4)).values[0])
+        mu_t = float(((mu_annual_t * 0.2) + (expected_return * 0.2) + (implied_return * 0.4)).iloc[0])
         # volatility
-        sigma_t = sigma_annual_t.values[0]
+        sigma_t = sigma_annual_t.iloc[0]
         # calculate Moving Averages and Signal MA
         ma_50_t = training_data.rolling(50).mean()
         ma_200_t = training_data.rolling(200).mean()
@@ -239,13 +259,15 @@ for i, ticker in enumerate(tickers):
         # probability that price will be above "X"
         probability_t = (final_prices_t > Starting_Price_t).mean()
         probability3_t = (final_prices_t > 1.2 * Starting_Price_t).mean()
-        #how much is put in for each trade
-        investment = position_size(probability_t)
-        # strength confidence signal
-        print(f"{year}: P={probability_t:.0%}, MA={ma_signal_t}, Investment=%{investment}")
+        
+        
         actual_return = actual_data.iloc[-1] - actual_data.iloc[0]
         if (probability_t > 0.63) and (ma_signal_t == 'BUY'):
             print(f"{year}: Strong Buy")
+            #how much is put in for each trade
+            investment = multiplier[ticker] * position_size(probability_t)
+            # strength confidence signal
+            print(f"{year}: P={probability_t:.0%}, MA={ma_signal_t}, Investment=%{investment}")
             # calculate take profit
             take_profit_hit = np.any(actual_data > (Starting_Price_t * 1.2))
             # calculate profit/loss in dollars
@@ -257,8 +279,6 @@ for i, ticker in enumerate(tickers):
                 yearly_returns.append(0)
             total_pnl += profit_loss
             total_invested += investment
-            portfolio_pnl += total_pnl
-            portfolio_invested += total_invested
             print(f"{year}: Investment=${investment}, P&L=${profit_loss:.2f}")
             print(f"Take profit hit: {take_profit_hit}")
         else:
@@ -287,6 +307,9 @@ for i, ticker in enumerate(tickers):
     bh_end = closes["2023-01-01" : "2024-01-01"].iloc[-1].iloc[0]
     p_gain_hold = (bh_end / bh_start) - 1
 
+    portfolio_pnl += total_pnl
+    portfolio_invested += total_invested
+    
     # Sharpe Ratio Calculation
     if np.std(yearly_returns, ddof=1) > 0:
         Sharpe = (np.mean(yearly_returns) - risk_free_rate) / np.std(yearly_returns, ddof=1)
@@ -331,19 +354,7 @@ for i, ticker in enumerate(tickers):
             bbox=dict(boxstyle='round', facecolor='black', alpha=0.5))
     axes[i].legend(loc='lower right')
 
-returns_df = pd.DataFrame(all_returns) # converting the dictionary to DataFrame
-correlation_matrix = returns_df.corr() # calculating the correlation between the columns of the DataFrame
-print(correlation_matrix)
 
-avg_correlation = {}
-for ticker in tickers:
-    row = correlation_matrix[ticker]
-    avg_correlation[ticker] = row.drop(ticker).mean()
-print(f" average correlation is {avg_correlation}")
-multiplier = {}
-for ticker in tickers:
-    multiplier[ticker] = 1 - avg_correlation[ticker]
-print(multiplier)
 
 print(f"/n{'='*40}")
 print(f"PORTFOLIO SUMMARY")
