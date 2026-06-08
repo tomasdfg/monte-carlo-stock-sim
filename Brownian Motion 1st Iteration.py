@@ -127,6 +127,20 @@ for ticker in tickers:
     multiplier[ticker] = 1 - avg_correlation[ticker]
 print(multiplier)
 
+# collecting data from "SPY" for golden cross and evil cross for better probability estimation
+if os.path.exists(f"data/SPY_data.csv"):
+    file_age = datetime.today() - datetime.fromtimestamp(os.path.getmtime(f"data/SPY_data.csv"))
+else:
+    file_age = None
+
+if file_age is not None and file_age.days < 1:
+    data = pd.read_csv(f"data/SPY_data.csv", index_col=0, header=[0,1])
+else:
+    data = yf.download("SPY", period="10y", auto_adjust=True)
+    data.to_csv(f"data/SPY_data.csv")
+
+spy_closes = data["Close"]
+
 ##### PASS 2 #####
 for i, ticker in enumerate(tickers):
 
@@ -260,9 +274,14 @@ for i, ticker in enumerate(tickers):
         probability_t = (final_prices_t > Starting_Price_t).mean()
         probability3_t = (final_prices_t > 1.2 * Starting_Price_t).mean()
         
-        
         actual_return = actual_data.iloc[-1] - actual_data.iloc[0]
-        if (probability_t > 0.63) and (ma_signal_t == 'BUY'):
+        # getting "SPY" MA so that I can adjust probability threshold for golden vs death cross
+        spy_training_data = spy_closes[f"{year-2}-01-01":f"{year}-01-01"]
+        spy_ma_50_t = spy_training_data.rolling(50).mean()
+        spy_ma_200_t = spy_training_data.rolling(200).mean()
+        threshold = 0.8 if spy_ma_200_t.iloc[-1].iloc[0] > spy_ma_50_t.iloc[-1].iloc[0] else 0.63
+        # probabilty and buy signal
+        if (probability_t > threshold) and (ma_signal_t == 'BUY'):
             print(f"{year}: Strong Buy")
             #how much is put in for each trade
             investment = multiplier[ticker] * position_size(probability_t)
