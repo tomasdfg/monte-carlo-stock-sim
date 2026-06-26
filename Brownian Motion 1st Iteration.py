@@ -5,6 +5,7 @@ import yfinance as yf
 import pandas as pd
 import sqlite3
 from datetime import datetime
+import plotly_viz as PLV
 
 # --- SETTINGS ---
 tickers = ["AAPL", "NVDA", "AMZN", "MSFT", "GLD"]
@@ -141,12 +142,20 @@ else:
 
 spy_closes = data["Close"]
 
+# set dictionaries of probability things for the visualizer
+S0 = {}
+median = {}
+p5 = {}
+p25 = {}
+p75 = {}
+p95 = {}
+
 ##### PASS 2 #####
 for i, ticker in enumerate(tickers):
 
     closes = all_closes[ticker]
     log_returns = all_returns[ticker]
-    S0 = float(closes.iloc[-1].iloc[0])
+    S0[ticker] = float(closes.iloc[-1].iloc[0])
 
     mu_calc = log_returns.mean() 
     sigma_calc = log_returns.std() 
@@ -172,7 +181,7 @@ for i, ticker in enumerate(tickers):
     if analyst_target is None:
         implied_return = expected_return # fall back to CAPM if no analyst target
     else:
-        implied_return = (analyst_target / S0) - 1
+        implied_return = (analyst_target / S0[ticker]) - 1
 
     # --- MU & SIGMA ESTIMATION ---
     # drift: blended 40% historical + 60% CAPM
@@ -192,12 +201,13 @@ for i, ticker in enumerate(tickers):
     # include array of 1's
     St = np.vstack([np.ones(M), St])
     # multiply through by S0 and return the cumulative product of elements along a given simulation path (axis=0)
-    St = S0 * St.cumprod(axis=0)
-    median = np.percentile(St, 50, axis=1)
-    p5 = np.percentile(St, 5, axis=1)
-    p95 = np.percentile(St, 95, axis=1)
-    p25 = np.percentile(St, 25, axis=1)
-    p75 = np.percentile(St, 75, axis=1)
+    St = S0[ticker] * St.cumprod(axis=0)
+    median[ticker] = np.percentile(St, 50, axis=1)
+    p5[ticker] = np.percentile(St, 5, axis=1)
+    p25[ticker] = np.percentile(St, 25, axis=1)
+    p75[ticker] = np.percentile(St, 75, axis=1)
+    p95[ticker] = np.percentile(St, 95, axis=1)
+
     # define time interval correctly
     time = np.linspace(0,T,n+1)
 
@@ -206,11 +216,11 @@ for i, ticker in enumerate(tickers):
 
     # --- PROBABILITY ANALYSIS ---
     # probability that price will be above "X"
-    probability = (final_prices > S0).mean()
+    probability = (final_prices > S0[ticker]).mean()
     print(probability)
     probability2 = (final_prices > price_target).mean()
     print(f"Probability of over ${price_target}: {probability2}")
-    probability3 = (final_prices > 1.2 * S0).mean()
+    probability3 = (final_prices > 1.2 * S0[ticker]).mean()
     print(f"Probability of final price over 20% gain: {probability3}")
 
     # insert fundamentals into database
@@ -349,23 +359,23 @@ for i, ticker in enumerate(tickers):
 
     # --- CHART ---
     # plot figure
-    axes[i].plot(time, median)
-    axes[i].plot(time, p95)
-    axes[i].plot(time, p5)
-    axes[i].fill_between(time, p5, p95, alpha=0.3)
-    axes[i].fill_between(time, p25, p75, alpha=0.4, color='steelblue')
+    axes[i].plot(time, median[ticker])
+    axes[i].plot(time, p95[ticker])
+    axes[i].plot(time, p5[ticker])
+    axes[i].fill_between(time, p5[ticker], p95[ticker], alpha=0.3)
+    axes[i].fill_between(time, p25[ticker], p75[ticker], alpha=0.4, color='steelblue')
     axes[i].set_xlabel("Years $(t)$")
     axes[i].set_ylabel("Stock Price $S_t$")
     axes[i].set_title(f"{ticker} Stock Price Forecast Across {T} Year(s)")
     axes[i].set_xlim(0, T * 1.15)
     axes[i].grid(True, alpha=0.3)
-    axes[i].axhline(y=S0, color='white', linewidth=1, linestyle='--', label=f"Current Price ${S0:.2f}")
-    axes[i].annotate(f"${p95[-1]:.1f}", xy=(T, p95[-1]), color='lime')
-    axes[i].annotate(f"${median[-1]:.1f}", xy=(T, median[-1]), color='olivedrab')
-    axes[i].annotate(f"${p5[-1]:.1f}", xy=(T, p5[-1]), color='red')
-    axes[i].annotate(f"${p25[-1]:.1f}", xy=(T, p25[-1]), color='darkred')
-    axes[i].annotate(f"${p75[-1]:.1f}", xy=(T, p75[-1]), color='lightgreen')
-    axes[i].annotate(f"${S0:.1f}", xy=(0, S0), color='cyan', ha='right')
+    axes[i].axhline(y=S0[ticker], color='white', linewidth=1, linestyle='--', label=f"Current Price ${S0[ticker]:.2f}")
+    axes[i].annotate(f"${p95[ticker][-1]:.1f}", xy=(T, p95[ticker][-1]), color='lime')
+    axes[i].annotate(f"${median[ticker][-1]:.1f}", xy=(T, median[ticker][-1]), color='olivedrab')
+    axes[i].annotate(f"${p5[ticker][-1]:.1f}", xy=(T, p5[ticker][-1]), color='red')
+    axes[i].annotate(f"${p25[ticker][-1]:.1f}", xy=(T, p25[ticker][-1]), color='darkred')
+    axes[i].annotate(f"${p75[ticker][-1]:.1f}", xy=(T, p75[ticker][-1]), color='lightgreen')
+    axes[i].annotate(f"${S0[ticker]:.1f}", xy=(0, S0[ticker]), color='cyan', ha='right')
 
     stats_text = f"P(gain): {probability:.0%}\nP(+20%): {probability3:.0%}\nP(${price_target}): {probability2:.0%}"
     axes[i].text(0.02, 0.97, stats_text, transform=axes[i].transAxes,
@@ -373,7 +383,7 @@ for i, ticker in enumerate(tickers):
             bbox=dict(boxstyle='round', facecolor='black', alpha=0.5))
     axes[i].legend(loc='lower right')
 
-
+PLV.plot_simulation(tickers, time, median, p5, p25, p75, p95, S0, T)
 
 print(f"/n{'='*40}")
 print(f"PORTFOLIO SUMMARY")
