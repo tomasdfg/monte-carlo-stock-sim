@@ -53,7 +53,11 @@ def plot_simulation(tickers, time, all_medians, all_p5, all_p25, all_p75, all_p9
     fig.update_layout(
         updatemenus=[dict(
             active=0,
-            buttons=buttons
+            buttons=buttons,
+            font=dict(color="black"),
+            bgcolor="blue",
+            bordercolor="white",
+            borderwidth=2,
         )],
         title="Monte Carlo Stock Price Simulation",
         xaxis_title="Years",
