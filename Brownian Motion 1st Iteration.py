@@ -185,7 +185,7 @@ for i, ticker in enumerate(tickers):
 
     # --- MU & SIGMA ESTIMATION ---
     # drift: blended 40% historical + 60% CAPM
-    mu = float(((mu_annual * 0.2) + (expected_return * 0.2) + (implied_return * 0.4)))
+    mu = float(((mu_annual * 0.2) + (expected_return * 0.2) + (implied_return * 0.6)))
     print(f"Blended mu: {mu:.2%}")
     # volatility
     sigma = sigma_annual
