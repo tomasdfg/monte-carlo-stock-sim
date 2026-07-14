@@ -1,3 +1,6 @@
+import os
+import webbrowser
+
 import plotly.graph_objects as go
 import numpy as np
 
@@ -65,6 +68,6 @@ def plot_simulation(tickers, time, all_medians, all_p5, all_p25, all_p75, all_p9
         template="plotly_dark"    
     )
 
-    import os
     path = os.path.abspath("output_chart.html")
-    os.system(f"open '{path}'")
+    fig.write_html(path)
+    webbrowser.open(f"file://{path}")

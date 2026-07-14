@@ -17,6 +17,12 @@ T = 1
 M = 1000
 # target price
 price_target = 300
+# fixed seed so runs are reproducible and changes to the model can be compared
+# against each other rather than against Monte Carlo sampling noise.
+# set to None to draw a fresh sample each run.
+RANDOM_SEED = 42
+
+np.random.seed(RANDOM_SEED)
 
 # --- DATA LOADING ---
 today = datetime.today().strftime('%Y-%m-%d')
@@ -27,15 +33,21 @@ os.makedirs("data", exist_ok=True)
 conn = sqlite3.connect("data/market_data.db")
 cursor = conn.cursor()
 
+# Older versions of this script wrote `prices` with to_sql(if_exists="replace"), which
+# blew away the schema below and left stringified MultiIndex columns. Drop it so the
+# table always matches the schema we insert against; it is a cache rebuilt from the
+# per-ticker CSVs on every run, so nothing unrecoverable is lost.
+cursor.execute("DROP TABLE IF EXISTS prices")
 cursor.execute('''
-    CREATE TABLE IF NOT EXISTS prices (
+    CREATE TABLE prices (
         ticker TEXT,
         date TEXT,
         open REAL,
         high REAL,
         low REAL,
         close REAL,
-        volume INTEGER
+        volume INTEGER,
+        PRIMARY KEY (ticker, date)
     )
 ''')
 conn.commit()
@@ -77,10 +89,18 @@ def position_size(probability):
     else:
         return 0
 
+# a Sharpe needs at least two samples and some dispersion between them
+def sharpe_ratio(returns, rf):
+    if len(returns) < 2:
+        return 0.0
+    stdev = np.std(returns, ddof=1)
+    if stdev == 0:
+        return 0.0
+    return (np.mean(returns) - rf) / stdev
+
 plt.style.use("dark_background") # sets background to black
 fig, axes = plt.subplots(2, 3, figsize=(20,7.25)) # Sets sizing but conflicts with plt.tight_layout()
 axes = axes.flatten() # converts 2D grid to a simple list
-plt.style.use("dark_background")
 
 all_returns = {} # this makes a dictionary to store all the returns from each ticker in one place
 all_closes = {}
@@ -100,8 +120,22 @@ for ticker in tickers:
 
 
 
-    # save downloaded price history for {ticker} to the prices table in the database
-    data.to_sql("prices", conn, if_exists="replace", index=True)
+    # save downloaded price history for {ticker} to the prices table in the database.
+    # yfinance hands back MultiIndex columns like ("Close", "AAPL"); flatten them into
+    # the flat schema above and tag each row with its ticker, so every ticker coexists.
+    price_rows = pd.DataFrame({
+        "ticker": ticker,
+        "date": pd.to_datetime(data.index).strftime("%Y-%m-%d"),
+        "open": data["Open"].squeeze().to_numpy(),
+        "high": data["High"].squeeze().to_numpy(),
+        "low": data["Low"].squeeze().to_numpy(),
+        "close": data["Close"].squeeze().to_numpy(),
+        "volume": data["Volume"].squeeze().to_numpy(),
+    })
+    # drop this ticker's previous rows so a rerun refreshes rather than duplicates
+    cursor.execute("DELETE FROM prices WHERE ticker = ?", (ticker,))
+    conn.commit()
+    price_rows.to_sql("prices", conn, if_exists="append", index=False)
 
     closes = data["Close"]
     all_closes[ticker] = closes
@@ -184,7 +218,7 @@ for i, ticker in enumerate(tickers):
         implied_return = (analyst_target / S0[ticker]) - 1
 
     # --- MU & SIGMA ESTIMATION ---
-    # drift: blended 40% historical + 60% CAPM
+    # drift: blended 20% historical + 20% CAPM + 60% analyst-implied
     mu = float(((mu_annual * 0.2) + (expected_return * 0.2) + (implied_return * 0.6)))
     print(f"Blended mu: {mu:.2%}")
     # volatility
@@ -223,9 +257,14 @@ for i, ticker in enumerate(tickers):
     probability3 = (final_prices > 1.2 * S0[ticker]).mean()
     print(f"Probability of final price over 20% gain: {probability3}")
 
-    # insert fundamentals into database
+    # insert fundamentals into database, clearing today's prior row so repeated runs
+    # on the same day overwrite instead of piling up duplicates
+    cursor.execute(
+        "DELETE FROM fundamentals WHERE ticker = ? AND last_updated = ?",
+        (ticker, today),
+    )
     cursor.execute('''
-        INSERT INTO fundamentals 
+        INSERT INTO fundamentals
         (ticker, beta, risk_free_rate, analyst_target, expected_return, last_updated)
         VALUES (?, ?, ?, ?, ?, ?)
     ''', (ticker, beta, risk_free_rate, analyst_target, expected_return, today))
@@ -238,8 +277,11 @@ for i, ticker in enumerate(tickers):
     total = 0
     total_pnl = 0
     total_invested = 0
-    yearly_returns = []
-    
+    # realized return of each year we actually traded
+    traded_returns = []
+    # same, but every backtest year, with no-trade years carried as a flat 0.0
+    all_year_returns = []
+
 
     for year in range(2018, 2024):
         training_data = closes[f"{year-2}-01-01":f"{year}-01-01"]
@@ -250,8 +292,8 @@ for i, ticker in enumerate(tickers):
         sigma_calc_t = log_returns_t.std() 
         mu_annual_t = mu_calc_t * 252
         sigma_annual_t = sigma_calc_t * np.sqrt(252)
-        # drift: blended 40% historical + 60% CAPM
-        mu_t = float(((mu_annual_t * 0.2) + (expected_return * 0.2) + (implied_return * 0.4)).iloc[0])
+        # drift: blended 20% historical + 20% CAPM + 60% analyst-implied
+        mu_t = float(((mu_annual_t * 0.2) + (expected_return * 0.2) + (implied_return * 0.6)).iloc[0])
         # volatility
         sigma_t = sigma_annual_t.iloc[0]
         # calculate Moving Averages and Signal MA
@@ -296,35 +338,41 @@ for i, ticker in enumerate(tickers):
             #how much is put in for each trade
             investment = multiplier[ticker] * position_size(probability_t)
             # strength confidence signal
-            print(f"{year}: P={probability_t:.0%}, MA={ma_signal_t}, Investment=%{investment}")
+            print(f"{year}: P={probability_t:.0%}, MA={ma_signal_t}, Investment=${investment}")
             # calculate take profit
             take_profit_hit = np.any(actual_data > (Starting_Price_t * 1.2))
-            # calculate profit/loss in dollars
+            # realized return on the trade: the year's actual move, capped at the
+            # +20% take-profit if that level was touched
             if take_profit_hit:
-                profit_loss = investment * 0.20
-                yearly_returns.append(0.20)
+                realized_return = 0.20
             else:
-                profit_loss = investment * (actual_return.iloc[0] / Starting_Price_t)
-                yearly_returns.append(0)
+                realized_return = actual_return.iloc[0] / Starting_Price_t
+            # calculate profit/loss in dollars
+            profit_loss = investment * realized_return
+            traded_returns.append(realized_return)
+            all_year_returns.append(realized_return)
             total_pnl += profit_loss
             total_invested += investment
-            print(f"{year}: Investment=${investment}, P&L=${profit_loss:.2f}")
+            print(f"{year}: Investment=${investment}, P&L=${profit_loss:.2f}, Return={realized_return:.1%}")
             print(f"Take profit hit: {take_profit_hit}")
         else:
             print(f"{year}: No Trade")
-            yearly_returns.append(0)
+            all_year_returns.append(0.0)
 
         #check what actually happened:
         predicted_direction = "UP" if probability_t > 0.5 else "DOWN"
         actual_direction = "UP" if actual_return.iloc[0] > 0 else "DOWN"
         is_correct = 1 if predicted_direction == actual_direction else 0
-        print(f"{year}: P(gain)={probability_t:.0%}, Actual={'UP' if actual_return.iloc[0] > 0 else 'DOWN'}")
-        if (probability_t > 0.5) and (actual_return.iloc[0] > 0):
-            correct +=1
-            total +=1
-        else:
-            total +=1
-        
+        print(f"{year}: P(gain)={probability_t:.0%}, Predicted={predicted_direction}, Actual={actual_direction}")
+        # credit any correct call, not just correct UP calls
+        correct += is_correct
+        total += 1
+
+        # clear this run's prior row for the same ticker/year so reruns refresh it
+        cursor.execute(
+            "DELETE FROM backtest_results WHERE ticker = ? AND year = ? AND today = ?",
+            (ticker, year, today),
+        )
         cursor.execute('''
             INSERT INTO backtest_results
             (ticker, year, predicted_direction, actual_direction, probability_t, is_correct, today)
@@ -339,16 +387,19 @@ for i, ticker in enumerate(tickers):
     portfolio_pnl += total_pnl
     portfolio_invested += total_invested
     
-    # Sharpe Ratio Calculation
-    if np.std(yearly_returns, ddof=1) > 0:
-        Sharpe = (np.mean(yearly_returns) - risk_free_rate) / np.std(yearly_returns, ddof=1)
-    else:
-        Sharpe = 0    
+    # Sharpe Ratio Calculation, reported two ways:
+    #   traded-years-only  -> "when this strategy trades, how good are those trades"
+    #   all-years          -> "return on capital held in this sleeve year-round",
+    #                         counting no-trade years as a flat 0%
+    # Needs >= 2 samples with some dispersion, else stdev is 0/undefined.
+    sharpe_traded = sharpe_ratio(traded_returns, risk_free_rate)
+    sharpe_all_years = sharpe_ratio(all_year_returns, risk_free_rate)
 
-    print(f"Sharpe Ratio: {Sharpe:.2f}")
+    print(f"Sharpe Ratio (traded years only, n={len(traded_returns)}): {sharpe_traded:.2f}")
+    print(f"Sharpe Ratio (all years, no-trade=0, n={len(all_year_returns)}): {sharpe_all_years:.2f}")
     print(f"Buy & Hold return (2018-2023): {p_gain_hold:.1%}")
     print(f"Backtest accuracy: {correct}/{total} = {correct/total:.0%}")
-    print(f"/n--- STRATEGY SUMMARY ---")
+    print(f"\n--- STRATEGY SUMMARY ---")
     print(f"Total invested: ${total_invested}")
     print(f"Total P&L: ${total_pnl:.2f}")
     print(f"Total return: {(total_pnl/total_invested)*100:.1f}%" if total_invested > 0 else "No trades")
@@ -385,7 +436,7 @@ for i, ticker in enumerate(tickers):
 
 PLV.plot_simulation(tickers, time, median, p5, p25, p75, p95, S0, T)
 
-print(f"/n{'='*40}")
+print(f"\n{'='*40}")
 print(f"PORTFOLIO SUMMARY")
 print(f"{'='*40}")
 print(f"Total invested across all tickers: ${portfolio_invested}")
@@ -411,4 +462,7 @@ ax.set_title("Portfolio Correlation Matrix", pad=20)
 plt.colorbar(im, ax=ax)
 
 plt.subplots_adjust(hspace=0.3, wspace=0.4) # manually setting spacing in between graphs
+
+conn.close()
+
 plt.show()
