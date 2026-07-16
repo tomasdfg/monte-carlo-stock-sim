@@ -17,6 +17,12 @@ T = 1
 M = 1000
 # target price
 price_target = 300
+# pinned start of the price history. period="10y" anchored to today, so the
+# dataset silently shifted every day and the 2018 training window was truncated
+# (10y back from mid-2026 starts at mid-2016). With a fixed start, every backtest
+# window is a date-bounded slice that never moves; the end stays open so the
+# forward projection always uses the latest close.
+DATA_START = "2016-01-01"
 # fixed seed so runs are reproducible and changes to the model can be compared
 # against each other rather than against Monte Carlo sampling noise.
 # set to None to draw a fresh sample each run.
@@ -115,7 +121,7 @@ for ticker in tickers:
     if file_age is not None and file_age.days < 1:
         data = pd.read_csv(f"data/{ticker}_data.csv", index_col=0, header=[0,1])
     else:
-        data = yf.download(ticker, period="10y", auto_adjust=True)
+        data = yf.download(ticker, start=DATA_START, auto_adjust=True)
         data.to_csv(f"data/{ticker}_data.csv")
 
 
@@ -167,7 +173,9 @@ print(multiplier)
 # For each backtest year, rebuild it from only that year's two-year training window
 # (the same window the drift and moving averages train on). Keep this range in
 # sync with the backtest loop below.
-BACKTEST_YEARS = range(2018, 2024)
+# every complete year with a full 2-year training window behind it, given
+# DATA_START above: first testable year is 2018, last complete year is 2025.
+BACKTEST_YEARS = range(2018, 2026)
 backtest_multiplier = {}
 for year in BACKTEST_YEARS:
     window_corr = returns_df[f"{year-2}-01-01":f"{year}-01-01"].corr()
@@ -184,7 +192,7 @@ else:
 if file_age is not None and file_age.days < 1:
     data = pd.read_csv(f"data/SPY_data.csv", index_col=0, header=[0,1])
 else:
-    data = yf.download("SPY", period="10y", auto_adjust=True)
+    data = yf.download("SPY", start=DATA_START, auto_adjust=True)
     data.to_csv(f"data/SPY_data.csv")
 
 spy_closes = data["Close"]
@@ -395,9 +403,11 @@ for i, ticker in enumerate(tickers):
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (ticker, year, predicted_direction, actual_direction, probability_t, is_correct, today))
         conn.commit()
-    #calculating what the hold amount would be
-    bh_start = closes["2018-01-01" : "2018-02-01"].iloc[0].iloc[0]
-    bh_end = closes["2023-01-01" : "2024-01-01"].iloc[-1].iloc[0]
+    #calculating what the hold amount would be, over the same span as the backtest
+    bh_first_year = BACKTEST_YEARS[0]
+    bh_last_year = BACKTEST_YEARS[-1]
+    bh_start = closes[f"{bh_first_year}-01-01" : f"{bh_first_year}-02-01"].iloc[0].iloc[0]
+    bh_end = closes[f"{bh_last_year}-01-01" : f"{bh_last_year+1}-01-01"].iloc[-1].iloc[0]
     p_gain_hold = (bh_end / bh_start) - 1
 
     portfolio_pnl += total_pnl
@@ -413,7 +423,7 @@ for i, ticker in enumerate(tickers):
 
     print(f"Sharpe Ratio (traded years only, n={len(traded_returns)}): {sharpe_traded:.2f}")
     print(f"Sharpe Ratio (all years, no-trade=0, n={len(all_year_returns)}): {sharpe_all_years:.2f}")
-    print(f"Buy & Hold return (2018-2023): {p_gain_hold:.1%}")
+    print(f"Buy & Hold return ({bh_first_year}-{bh_last_year}): {p_gain_hold:.1%}")
     print(f"Backtest accuracy: {correct}/{total} = {correct/total:.0%}")
     print(f"\n--- STRATEGY SUMMARY ---")
     print(f"Total invested: ${total_invested}")
