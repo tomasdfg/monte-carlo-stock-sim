@@ -162,6 +162,19 @@ for ticker in tickers:
     multiplier[ticker] = 1 - avg_correlation[ticker]
 print(multiplier)
 
+# Backtest position sizing must not see future correlations: the multiplier above
+# is built on the full 10-year sample, which includes the very years being tested.
+# For each backtest year, rebuild it from only that year's two-year training window
+# (the same window the drift and moving averages train on). Keep this range in
+# sync with the backtest loop below.
+BACKTEST_YEARS = range(2018, 2024)
+backtest_multiplier = {}
+for year in BACKTEST_YEARS:
+    window_corr = returns_df[f"{year-2}-01-01":f"{year}-01-01"].corr()
+    backtest_multiplier[year] = {
+        t: 1 - window_corr[t].drop(t).mean() for t in tickers
+    }
+
 # collecting data from "SPY" for golden cross and evil cross for better probability estimation
 if os.path.exists(f"data/SPY_data.csv"):
     file_age = datetime.today() - datetime.fromtimestamp(os.path.getmtime(f"data/SPY_data.csv"))
@@ -283,7 +296,7 @@ for i, ticker in enumerate(tickers):
     all_year_returns = []
 
 
-    for year in range(2018, 2024):
+    for year in BACKTEST_YEARS:
         training_data = closes[f"{year-2}-01-01":f"{year}-01-01"]
         actual_data = closes[f"{year}-01-01":f"{year+1}-01-01"]
         #calc MU and SIGMA from T-data:
@@ -292,8 +305,11 @@ for i, ticker in enumerate(tickers):
         sigma_calc_t = log_returns_t.std() 
         mu_annual_t = mu_calc_t * 252
         sigma_annual_t = sigma_calc_t * np.sqrt(252)
-        # drift: blended 20% historical + 20% CAPM + 60% analyst-implied
-        mu_t = float(((mu_annual_t * 0.2) + (expected_return * 0.2) + (implied_return * 0.6)).iloc[0])
+        # drift: training-window historical mu ONLY. Today's analyst-implied return
+        # and today's CAPM expected_return are unknowable at the backtest date, so
+        # blending them in leaks future information into every simulated year
+        # (Phase 2 de-leak). The forward projection above still uses the full blend.
+        mu_t = float(mu_annual_t.iloc[0])
         # volatility
         sigma_t = sigma_annual_t.iloc[0]
         # calculate Moving Averages and Signal MA
@@ -336,7 +352,7 @@ for i, ticker in enumerate(tickers):
         if (probability_t > threshold) and (ma_signal_t == 'BUY'):
             print(f"{year}: Strong Buy")
             #how much is put in for each trade
-            investment = multiplier[ticker] * position_size(probability_t)
+            investment = backtest_multiplier[year][ticker] * position_size(probability_t)
             # strength confidence signal
             print(f"{year}: P={probability_t:.0%}, MA={ma_signal_t}, Investment=${investment}")
             # calculate take profit
