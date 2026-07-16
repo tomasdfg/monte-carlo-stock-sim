@@ -15,8 +15,10 @@ n = 100
 T = 1
 # number of sims
 M = 1000
-# target price
-price_target = 300
+# probability target as a % gain above each ticker's current price, so it is
+# meaningful across very different price levels. A flat $300 target was ~30% for
+# AAPL but nonsensical for GLD (~$60) or NVDA. Applied per ticker in PASS 2.
+PRICE_TARGET_PCT = 0.30
 # pinned start of the price history. period="10y" anchored to today, so the
 # dataset silently shifted every day and the 2018 training window was truncated
 # (10y back from mid-2026 starts at mid-2016). With a fixed start, every backtest
@@ -205,6 +207,11 @@ p25 = {}
 p75 = {}
 p95 = {}
 
+# risk-free rate from the 10-year Treasury yield. It is not ticker-specific, so
+# fetch it once here rather than re-fetching the identical value every iteration.
+treasury = yf.Ticker("^TNX")
+risk_free_rate = treasury.info['previousClose'] / 100
+
 ##### PASS 2 #####
 for i, ticker in enumerate(tickers):
 
@@ -220,13 +227,11 @@ for i, ticker in enumerate(tickers):
     print(mu_annual, sigma_annual)
 
     stock = yf.Ticker(ticker)
-    beta = stock.info.get('beta', 0)
+    # default to market beta (1.0), not 0: a beta of 0 silently collapses CAPM's
+    # expected return to the risk-free rate, which is not a sane fallback.
+    beta = stock.info.get('beta', 1)
     if beta is None:
-        beta = 0
-
-
-    treasury = yf.Ticker("^TNX")
-    risk_free_rate = treasury.info['previousClose'] / 100
+        beta = 1
 
     market_risk_premium = 0.055
 
@@ -273,8 +278,9 @@ for i, ticker in enumerate(tickers):
     # probability that price will be above "X"
     probability = (final_prices > S0[ticker]).mean()
     print(probability)
-    probability2 = (final_prices > price_target).mean()
-    print(f"Probability of over ${price_target}: {probability2}")
+    ticker_target = S0[ticker] * (1 + PRICE_TARGET_PCT)
+    probability2 = (final_prices > ticker_target).mean()
+    print(f"Probability of over ${ticker_target:.2f} (+{PRICE_TARGET_PCT:.0%}): {probability2}")
     probability3 = (final_prices > 1.2 * S0[ticker]).mean()
     print(f"Probability of final price over 20% gain: {probability3}")
 
@@ -363,13 +369,27 @@ for i, ticker in enumerate(tickers):
             investment = backtest_multiplier[year][ticker] * position_size(probability_t)
             # strength confidence signal
             print(f"{year}: P={probability_t:.0%}, MA={ma_signal_t}, Investment=${investment}")
-            # calculate take profit
-            take_profit_hit = np.any(actual_data > (Starting_Price_t * 1.2))
-            # realized return on the trade: the year's actual move, capped at the
-            # +20% take-profit if that level was touched
-            if take_profit_hit:
+            # exit rule: +20% take-profit vs -20% stop-loss (symmetric barriers),
+            # whichever the price touches FIRST chronologically (daily closes). The
+            # symmetric -20% gives a trade room to ride out a correction and still
+            # reach the take-profit rather than being stopped out early. Checking
+            # only whether a level was ever touched would let a late take-profit
+            # mask a stop-loss that already triggered earlier in the year.
+            tp_level = Starting_Price_t * 1.20
+            sl_level = Starting_Price_t * 0.80
+            price_path = actual_data.squeeze()
+            tp_days = price_path.index[price_path.to_numpy() >= tp_level]
+            sl_days = price_path.index[price_path.to_numpy() <= sl_level]
+            first_tp = tp_days[0] if len(tp_days) else None
+            first_sl = sl_days[0] if len(sl_days) else None
+            if first_tp is not None and (first_sl is None or first_tp <= first_sl):
+                exit_reason = "take-profit"
                 realized_return = 0.20
+            elif first_sl is not None:
+                exit_reason = "stop-loss"
+                realized_return = -0.20
             else:
+                exit_reason = "year-end"
                 realized_return = actual_return.iloc[0] / Starting_Price_t
             # calculate profit/loss in dollars
             profit_loss = investment * realized_return
@@ -377,8 +397,8 @@ for i, ticker in enumerate(tickers):
             all_year_returns.append(realized_return)
             total_pnl += profit_loss
             total_invested += investment
-            print(f"{year}: Investment=${investment}, P&L=${profit_loss:.2f}, Return={realized_return:.1%}")
-            print(f"Take profit hit: {take_profit_hit}")
+            print(f"{year}: Investment=${investment:.2f}, P&L=${profit_loss:.2f}, Return={realized_return:.1%}")
+            print(f"Exit: {exit_reason}")
         else:
             print(f"{year}: No Trade")
             all_year_returns.append(0.0)
@@ -454,7 +474,7 @@ for i, ticker in enumerate(tickers):
     axes[i].annotate(f"${p75[ticker][-1]:.1f}", xy=(T, p75[ticker][-1]), color='lightgreen')
     axes[i].annotate(f"${S0[ticker]:.1f}", xy=(0, S0[ticker]), color='cyan', ha='right')
 
-    stats_text = f"P(gain): {probability:.0%}\nP(+20%): {probability3:.0%}\nP(${price_target}): {probability2:.0%}"
+    stats_text = f"P(gain): {probability:.0%}\nP(+20%): {probability3:.0%}\nP(${ticker_target:.0f}): {probability2:.0%}"
     axes[i].text(0.02, 0.97, stats_text, transform=axes[i].transAxes,
             verticalalignment='top', color='white',
             bbox=dict(boxstyle='round', facecolor='black', alpha=0.5))
