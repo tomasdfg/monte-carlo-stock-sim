@@ -7,7 +7,8 @@ import sqlite3
 from datetime import datetime
 import plotly_viz as PLV
 
-from gbm_core import load_prices, run_monte_carlo, backtest, sharpe_ratio
+from gbm_core import (load_prices, run_monte_carlo, backtest, sharpe_ratio,
+                      win_rate, max_drawdown)
 
 # --- SETTINGS ---
 tickers = ["AAPL", "NVDA", "AMZN", "MSFT", "GLD"]
@@ -170,6 +171,15 @@ risk_free_rate = treasury.info['previousClose'] / 100
 
 portfolio_pnl = 0
 portfolio_invested = 0
+# collected across tickers for the portfolio-level benchmark metrics
+portfolio_traded_returns = []
+portfolio_yearly_pnl = [0.0] * len(BACKTEST_YEARS)
+portfolio_yearly_invested = [0.0] * len(BACKTEST_YEARS)
+
+# SPY buy & hold over the backtest span, as a market benchmark for the strategy
+spy_bh_start = spy_closes[f"{BACKTEST_YEARS[0]}-01-01":f"{BACKTEST_YEARS[0]}-02-01"].iloc[0]
+spy_bh_end = spy_closes[f"{BACKTEST_YEARS[-1]}-01-01":f"{BACKTEST_YEARS[-1]+1}-01-01"].iloc[-1]
+spy_buy_hold = (spy_bh_end / spy_bh_start) - 1
 
 ##### PASS 2 #####
 for i, ticker in enumerate(tickers):
@@ -248,6 +258,10 @@ for i, ticker in enumerate(tickers):
                       BACKTEST_YEARS, T, n, M, cursor, conn, today)
     portfolio_pnl += result["total_pnl"]
     portfolio_invested += result["total_invested"]
+    portfolio_traded_returns.extend(result["traded_returns"])
+    for y in range(len(BACKTEST_YEARS)):
+        portfolio_yearly_pnl[y] += result["yearly_pnl"][y]
+        portfolio_yearly_invested[y] += result["yearly_invested"][y]
 
     # Sharpe Ratio Calculation, reported two ways:
     #   traded-years-only  -> "when this strategy trades, how good are those trades"
@@ -256,9 +270,15 @@ for i, ticker in enumerate(tickers):
     # Needs >= 2 samples with some dispersion, else stdev is 0/undefined.
     sharpe_traded = sharpe_ratio(result["traded_returns"], risk_free_rate)
     sharpe_all_years = sharpe_ratio(result["all_year_returns"], risk_free_rate)
+    # win rate over trades, and max drawdown of the compounded yearly-return curve
+    ticker_win_rate = win_rate(result["traded_returns"])
+    ticker_win_rate_str = "n/a" if ticker_win_rate is None else f"{ticker_win_rate:.0%}"
+    ticker_mdd = max_drawdown(result["all_year_returns"])
 
     print(f"Sharpe Ratio (traded years only, n={len(result['traded_returns'])}): {sharpe_traded:.2f}")
     print(f"Sharpe Ratio (all years, no-trade=0, n={len(result['all_year_returns'])}): {sharpe_all_years:.2f}")
+    print(f"Win rate: {ticker_win_rate_str} ({sum(1 for r in result['traded_returns'] if r > 0)}/{len(result['traded_returns'])} trades)")
+    print(f"Max drawdown (yearly, compounded): {ticker_mdd:.1%}")
     print(f"Buy & Hold return ({BACKTEST_YEARS[0]}-{BACKTEST_YEARS[-1]}): {result['p_gain_hold']:.1%}")
     print(f"Backtest accuracy: {result['correct']}/{result['total']} = {result['correct']/result['total']:.0%}")
     print(f"\n--- STRATEGY SUMMARY ---")
@@ -303,6 +323,21 @@ print(f"{'='*40}")
 print(f"Total invested across all tickers: ${portfolio_invested}")
 print(f"Total P&L across all tickers: ${portfolio_pnl:.2f}")
 print(f"Total portfolio return: {(portfolio_pnl / portfolio_invested) * 100:.1f}%" if portfolio_invested > 0 else "No trades")
+
+# --- BENCHMARK & RISK METRICS ---
+# capital-weighted portfolio return per backtest year -> compounded equity curve
+portfolio_yearly_return = [
+    (portfolio_yearly_pnl[y] / portfolio_yearly_invested[y]) if portfolio_yearly_invested[y] > 0 else 0.0
+    for y in range(len(BACKTEST_YEARS))
+]
+portfolio_mdd = max_drawdown(portfolio_yearly_return)
+portfolio_wr = win_rate(portfolio_traded_returns)
+portfolio_wr_str = "n/a" if portfolio_wr is None else f"{portfolio_wr:.0%}"
+portfolio_wins = sum(1 for r in portfolio_traded_returns if r > 0)
+
+print(f"SPY buy & hold ({BACKTEST_YEARS[0]}-{BACKTEST_YEARS[-1]}): {spy_buy_hold:.1%}")
+print(f"Portfolio win rate: {portfolio_wr_str} ({portfolio_wins}/{len(portfolio_traded_returns)} trades)")
+print(f"Portfolio max drawdown (yearly, compounded): {portfolio_mdd:.1%}")
 
 # create heatmap for correlation between tickers
 fig2, ax = plt.subplots(figsize=(8,6))

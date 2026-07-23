@@ -44,6 +44,26 @@ def sharpe_ratio(returns, rf):
     return (np.mean(returns) - rf) / stdev
 
 
+def win_rate(traded_returns):
+    """Fraction of trades that finished profitable. None when there were no
+    trades, so the caller can render it as n/a rather than a misleading 0%."""
+    if len(traded_returns) == 0:
+        return None
+    wins = sum(1 for r in traded_returns if r > 0)
+    return wins / len(traded_returns)
+
+
+def max_drawdown(period_returns):
+    """Largest peak-to-trough decline of a $1 equity curve compounded from the
+    given per-period returns. Returns <= 0 (0.0 if the curve never dips below a
+    prior peak)."""
+    if len(period_returns) == 0:
+        return 0.0
+    equity = np.cumprod(1 + np.asarray(period_returns, dtype=float))
+    running_peak = np.maximum.accumulate(equity)
+    return float((equity / running_peak - 1).min())
+
+
 def load_prices(ticker):
     """Load a ticker's price history from its cached CSV when the cache is less
     than a day old, otherwise re-download it and refresh the cache. This caching
@@ -93,6 +113,10 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, T, n, M,
     traded_returns = []
     # same, but every backtest year, with no-trade years carried as a flat 0.0
     all_year_returns = []
+    # per-year dollar P&L and capital deployed (0.0 in no-trade years), so the
+    # caller can build a capital-weighted portfolio equity curve for drawdown
+    yearly_pnl = []
+    yearly_invested = []
 
     for year in years:
         training_data = closes[f"{year-2}-01-01":f"{year}-01-01"]
@@ -160,6 +184,8 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, T, n, M,
             profit_loss = investment * realized_return
             traded_returns.append(realized_return)
             all_year_returns.append(realized_return)
+            yearly_pnl.append(profit_loss)
+            yearly_invested.append(investment)
             total_pnl += profit_loss
             total_invested += investment
             if verbose:
@@ -169,6 +195,8 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, T, n, M,
             if verbose:
                 print(f"{year}: No Trade")
             all_year_returns.append(0.0)
+            yearly_pnl.append(0.0)
+            yearly_invested.append(0.0)
 
         #check what actually happened:
         predicted_direction = "UP" if probability_t > 0.5 else "DOWN"
@@ -207,5 +235,7 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, T, n, M,
         "total_invested": total_invested,
         "traded_returns": traded_returns,
         "all_year_returns": all_year_returns,
+        "yearly_pnl": yearly_pnl,
+        "yearly_invested": yearly_invested,
         "p_gain_hold": p_gain_hold,
     }
