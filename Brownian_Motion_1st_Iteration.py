@@ -8,7 +8,7 @@ from datetime import datetime
 import plotly_viz as PLV
 
 from gbm_core import (load_prices, run_monte_carlo, backtest, sharpe_ratio,
-                      win_rate, max_drawdown)
+                      win_rate, max_drawdown, simulate_correlated_portfolio)
 
 # --- SETTINGS ---
 tickers = ["AAPL", "NVDA", "AMZN", "MSFT", "GLD"]
@@ -163,6 +163,9 @@ p5 = {}
 p25 = {}
 p75 = {}
 p95 = {}
+# per-ticker historical drift/vol, collected for the correlated portfolio sim
+hist_mu = {}
+hist_sigma = {}
 
 # risk-free rate from the 10-year Treasury yield. It is not ticker-specific, so
 # fetch it once here rather than re-fetching the identical value every iteration.
@@ -190,6 +193,8 @@ for i, ticker in enumerate(tickers):
 
     mu_annual = log_returns.mean() * 252
     sigma_annual = log_returns.std() * np.sqrt(252)
+    hist_mu[ticker] = float(mu_annual)
+    hist_sigma[ticker] = float(sigma_annual)
 
     print(mu_annual, sigma_annual)
 
@@ -338,6 +343,45 @@ portfolio_wins = sum(1 for r in portfolio_traded_returns if r > 0)
 print(f"SPY buy & hold ({BACKTEST_YEARS[0]}-{BACKTEST_YEARS[-1]}): {spy_buy_hold:.1%}")
 print(f"Portfolio win rate: {portfolio_wr_str} ({portfolio_wins}/{len(portfolio_traded_returns)} trades)")
 print(f"Portfolio max drawdown (yearly, compounded): {portfolio_mdd:.1%}")
+
+# --- CORRELATED PORTFOLIO SIMULATION ---
+# Forward-looking risk view: simulate the 5 names jointly (equal weight) with
+# correlated GBM draws, using each name's historical drift/vol and the same
+# correlation matrix shown in the heatmap. Run it twice - once with the real
+# correlation, once pretending the names are independent - so the cost of
+# correlation (less diversification) is visible. This is a Gaussian sim (Cholesky
+# needs normal draws); the per-ticker backtest above keeps its bootstrap.
+port_mu = np.array([hist_mu[t] for t in tickers])
+port_sigma = np.array([hist_sigma[t] for t in tickers])
+port_weights = np.full(len(tickers), 1.0 / len(tickers))   # equal weight
+port_corr = correlation_matrix.loc[tickers, tickers].to_numpy()
+
+final_correlated = simulate_correlated_portfolio(port_mu, port_sigma, port_corr, port_weights, T, n, M)
+final_independent = simulate_correlated_portfolio(port_mu, port_sigma, np.eye(len(tickers)), port_weights, T, n, M)
+ret_correlated = final_correlated - 1.0
+ret_independent = final_independent - 1.0
+
+var5 = -np.percentile(ret_correlated, 5)   # 5% Value at Risk (a loss, reported positive)
+
+print(f"\n{'='*40}")
+print(f"CORRELATED PORTFOLIO SIMULATION (1yr, equal weight)")
+print(f"{'='*40}")
+print(f"Expected (mean) return: {ret_correlated.mean():.1%}")
+print(f"Median return: {np.percentile(ret_correlated, 50):.1%}")
+print(f"5th / 95th percentile: {np.percentile(ret_correlated, 5):.1%} / {np.percentile(ret_correlated, 95):.1%}")
+print(f"5% Value at Risk (1yr): {var5:.1%}")
+print(f"Probability of loss: {(ret_correlated < 0).mean():.0%}")
+print(f"Return volatility - correlated: {ret_correlated.std():.1%} vs independent: {ret_independent.std():.1%}")
+print(f"  (correlation removes {(1 - ret_independent.std()/ret_correlated.std()):.0%} of the diversification an independent sim assumes)")
+
+# plot the portfolio return distribution in the otherwise-empty 6th subplot
+axes[5].hist(ret_correlated * 100, bins=60, color='steelblue', alpha=0.8)
+axes[5].axvline(0, color='white', linewidth=1, linestyle='--')
+axes[5].axvline(np.percentile(ret_correlated, 5) * 100, color='red', linewidth=1, linestyle=':', label=f"5% VaR {var5:.0%}")
+axes[5].set_title("Portfolio 1-Yr Return Distribution (correlated)")
+axes[5].set_xlabel("Portfolio return (%)")
+axes[5].set_ylabel("Frequency")
+axes[5].legend(loc='upper right')
 
 # create heatmap for correlation between tickers
 fig2, ax = plt.subplots(figsize=(8,6))

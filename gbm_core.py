@@ -100,6 +100,41 @@ def run_monte_carlo(S0, mu, sigma, T, n, M):
     return S0 * steps.cumprod(axis=0)
 
 
+def simulate_correlated_portfolio(mu_vec, sigma_vec, corr, weights, T, n, M):
+    """Simulate the joint 1-year evolution of a portfolio of correlated assets and
+    return the M final portfolio values (portfolio starts at value 1.0).
+
+    Correlation is imposed with a Cholesky factor of the correlation matrix: for
+    independent standard normals Z, the product L @ Z has covariance L L^T = corr,
+    so the simulated names move together the way they historically do. Simulating
+    the assets independently would ignore this and understate portfolio risk,
+    because these names tend to fall together in a sell-off.
+
+    mu_vec / sigma_vec / weights are arrays aligned with the rows/cols of corr.
+    """
+    k = len(mu_vec)
+    mu_vec = np.asarray(mu_vec, dtype=float)
+    sigma_vec = np.asarray(sigma_vec, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    try:
+        L = np.linalg.cholesky(corr)
+    except np.linalg.LinAlgError:
+        # nudge onto the PSD cone if sampling noise made corr non-positive-definite
+        L = np.linalg.cholesky(corr + 1e-10 * np.eye(k))
+    dt = T / n
+    # price relative of each asset, all starting at 1.0
+    rel = np.ones((k, M))
+    for _ in range(n):
+        Z = np.random.normal(size=(k, M))
+        correlated = L @ Z  # (k, M) standard normals carrying the target correlation
+        rel *= np.exp(
+            (mu_vec[:, None] - sigma_vec[:, None] ** 2 / 2) * dt
+            + sigma_vec[:, None] * np.sqrt(dt) * correlated
+        )
+    # portfolio value = sum_i weight_i * (price relative of asset i)
+    return weights @ rel
+
+
 def bootstrap_paths(S0, daily_log_returns, n_days, M):
     """Simulate M price paths over n_days by resampling actual historical daily
     log returns with replacement (a bootstrap), instead of drawing Gaussian shocks.
