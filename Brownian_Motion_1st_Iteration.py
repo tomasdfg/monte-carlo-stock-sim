@@ -8,7 +8,9 @@ from datetime import datetime
 import plotly_viz as PLV
 
 from gbm_core import (load_prices, run_monte_carlo, backtest, sharpe_ratio,
-                      win_rate, max_drawdown, simulate_correlated_portfolio)
+                      win_rate, max_drawdown, simulate_correlated_portfolio,
+                      train_start_year, backtest_years,
+                      DATA_START, TRAINING_YEARS, WINDOW_MODE)
 
 # --- SETTINGS ---
 tickers = ["AAPL", "NVDA", "AMZN", "MSFT", "GLD"]
@@ -137,17 +139,23 @@ for ticker in tickers:
     multiplier[ticker] = 1 - avg_correlation[ticker]
 print(multiplier)
 
-# Backtest position sizing must not see future correlations: the multiplier above
-# is built on the full 10-year sample, which includes the very years being tested.
-# For each backtest year, rebuild it from only that year's two-year training window
-# (the same window the drift and moving averages train on). Keep this range in
-# sync with the backtest loop below.
-# every complete year with a full 2-year training window behind it, given
-# DATA_START above: first testable year is 2018, last complete year is 2025.
-BACKTEST_YEARS = range(2018, 2026)
+# Walk-forward span, derived from the available data rather than hardcoded: every
+# year with a full training window behind it, through the last complete year. The
+# training scheme (rolling/expanding, length) lives in gbm_core.
+last_data_date = pd.Timestamp(all_closes[tickers[0]].index[-1])
+BACKTEST_YEARS = backtest_years(last_data_date)
+print(f"Walk-forward: {WINDOW_MODE} window, "
+      f"{'anchored at ' + DATA_START[:4] if WINDOW_MODE == 'expanding' else str(TRAINING_YEARS) + 'yr'}, "
+      f"testing {BACKTEST_YEARS[0]}-{BACKTEST_YEARS[-1]}")
+
+# Backtest position sizing must not see future correlations: the full-history
+# multiplier above includes the very years being tested. For each backtest year,
+# rebuild it from only that year's training window (the same window the drift and
+# moving averages train on), honoring the walk-forward scheme.
 backtest_multiplier = {}
 for year in BACKTEST_YEARS:
-    window_corr = returns_df[f"{year-2}-01-01":f"{year}-01-01"].corr()
+    ts = train_start_year(year)
+    window_corr = returns_df[f"{ts}-01-01":f"{year}-01-01"].corr()
     backtest_multiplier[year] = {
         t: 1 - window_corr[t].drop(t).mean() for t in tickers
     }

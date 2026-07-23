@@ -16,20 +16,22 @@ committed backtest numbers, which doubles as a correctness check on this harness
 import numpy as np
 import pandas as pd
 
-from gbm_core import load_prices, run_monte_carlo, backtest
+from gbm_core import load_prices, run_monte_carlo, backtest, train_start_year, backtest_years
 
 # --- config: must match Brownian_Motion_1st_Iteration.py ---
 tickers = ["AAPL", "NVDA", "AMZN", "MSFT", "GLD"]
 n = 100          # steps
 T = 1            # years
 M = 1000         # sims
-BACKTEST_YEARS = range(2018, 2026)
 SEEDS = range(50)   # 0..49; seed 42 falls in here and reproduces the committed run
+# the walk-forward span (BACKTEST_YEARS) and window scheme are derived from the
+# data and gbm_core's config, exactly as the chart script does.
 
 
 def prepare_data():
     """Load closes for each ticker and SPY, and build the per-year, training-window
-    correlation multiplier. All of this is deterministic (seed-independent)."""
+    correlation multiplier. All of this is deterministic (seed-independent).
+    Also derives the walk-forward span from the available data."""
     all_closes = {}
     all_returns = {}
     for ticker in tickers:
@@ -38,19 +40,21 @@ def prepare_data():
         all_closes[ticker] = closes.squeeze()
         all_returns[ticker] = np.log(closes / closes.shift(1)).squeeze()
 
+    years = backtest_years(pd.Timestamp(all_closes[tickers[0]].index[-1]))
     returns_df = pd.DataFrame(all_returns)
     backtest_multiplier = {}
-    for year in BACKTEST_YEARS:
-        window_corr = returns_df[f"{year-2}-01-01":f"{year}-01-01"].corr()
+    for year in years:
+        ts = train_start_year(year)
+        window_corr = returns_df[f"{ts}-01-01":f"{year}-01-01"].corr()
         backtest_multiplier[year] = {
             t: 1 - window_corr[t].drop(t).mean() for t in tickers
         }
 
     spy_closes = load_prices("SPY")["Close"].squeeze()
-    return all_closes, spy_closes, backtest_multiplier
+    return all_closes, spy_closes, backtest_multiplier, years
 
 
-def run_one_seed(seed, all_closes, spy_closes, backtest_multiplier):
+def run_one_seed(seed, all_closes, spy_closes, backtest_multiplier, years):
     """Run the full backtest for every ticker under one seed and return the
     portfolio-level tallies plus the per-ticker accuracy."""
     np.random.seed(seed)
@@ -65,7 +69,7 @@ def run_one_seed(seed, all_closes, spy_closes, backtest_multiplier):
         # up with the committed single-seed run (the values are discarded)
         np.random.normal(0, np.sqrt(T / n), size=(M, n))
         result = backtest(ticker, all_closes[ticker], spy_closes,
-                          backtest_multiplier, BACKTEST_YEARS, M,
+                          backtest_multiplier, years, M,
                           verbose=False)
         port_correct += result["correct"]
         port_total += result["total"]
@@ -100,9 +104,9 @@ def describe(values):
 
 
 def main():
-    all_closes, spy_closes, backtest_multiplier = prepare_data()
+    all_closes, spy_closes, backtest_multiplier, years = prepare_data()
 
-    runs = [run_one_seed(s, all_closes, spy_closes, backtest_multiplier) for s in SEEDS]
+    runs = [run_one_seed(s, all_closes, spy_closes, backtest_multiplier, years) for s in SEEDS]
 
     # correctness check: seed 42 should reproduce the committed backtest numbers
     seed42 = next((r for s, r in zip(SEEDS, runs) if s == 42), None)
@@ -111,7 +115,7 @@ def main():
     print(f"{'='*60}")
     print(f"Seeds: {len(list(SEEDS))} ({min(SEEDS)}..{max(SEEDS)})   "
           f"Tickers: {len(tickers)}   Sims/path: {M}   Backtest years: "
-          f"{BACKTEST_YEARS[0]}-{BACKTEST_YEARS[-1]}")
+          f"{years[0]}-{years[-1]}")
     if seed42 is not None:
         print(f"Seed-42 check (should match committed run): "
               f"accuracy {seed42['correct']}/{seed42['total']} = "

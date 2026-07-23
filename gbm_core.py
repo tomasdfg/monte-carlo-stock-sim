@@ -19,12 +19,38 @@ import yfinance as yf
 # (10y back from mid-2026 starts at mid-2016). With a fixed start, every backtest
 # window is a date-bounded slice that never moves; the end stays open so the
 # forward projection always uses the latest close.
-DATA_START = "2016-01-01"
+DATA_START = "2010-01-01"
 
 # trading days in a one-year horizon. The bootstrap simulates a year by drawing
 # this many daily returns; the GBM path count (n) is an abstract discretization
 # and is not the right horizon for resampling real daily returns.
 TRADING_DAYS = 252
+
+# --- walk-forward configuration ---
+# WINDOW_MODE picks the training scheme for each backtest year:
+#   "rolling"   -> train on the trailing TRAINING_YEARS (a fixed-length window that
+#                  rolls forward; adapts to the recent regime, forgets old data)
+#   "expanding" -> anchor the window at DATA_START and grow it toward the test year
+#                  (uses all history to date; more stable, slower to adapt)
+TRAINING_YEARS = 2
+WINDOW_MODE = "rolling"
+
+
+def train_start_year(test_year):
+    """First calendar year of the training window for a given test year, honoring
+    WINDOW_MODE. Used for the return/vol estimation, the moving-average signal and
+    the position-sizing correlation, so they all train on the same window."""
+    if WINDOW_MODE == "expanding":
+        return int(DATA_START[:4])
+    return test_year - TRAINING_YEARS
+
+
+def backtest_years(last_data_date):
+    """Testable years given the available data: the first year that has a full
+    training window behind it, through the last fully-elapsed calendar year."""
+    first = int(DATA_START[:4]) + TRAINING_YEARS
+    last = last_data_date.year - 1
+    return range(first, last + 1)
 
 
 # define a function that states how much to put in for each trade
@@ -175,7 +201,8 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
     yearly_invested = []
 
     for year in years:
-        training_data = closes[f"{year-2}-01-01":f"{year}-01-01"]
+        train_start = train_start_year(year)
+        training_data = closes[f"{train_start}-01-01":f"{year}-01-01"]
         actual_data = closes[f"{year}-01-01":f"{year+1}-01-01"]
         # this window's daily log returns are the bootstrap source. Their mean is
         # the training-window historical drift (the Phase 2 de-leaked, no-look-ahead
@@ -197,7 +224,7 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
 
         actual_return = actual_data.iloc[-1] - actual_data.iloc[0]
         # getting "SPY" MA so that I can adjust probability threshold for golden vs death cross
-        spy_training_data = spy_closes[f"{year-2}-01-01":f"{year}-01-01"]
+        spy_training_data = spy_closes[f"{train_start}-01-01":f"{year}-01-01"]
         spy_ma_50_t = spy_training_data.rolling(50).mean()
         spy_ma_200_t = spy_training_data.rolling(200).mean()
         threshold = 0.8 if spy_ma_200_t.iloc[-1] > spy_ma_50_t.iloc[-1] else 0.63
