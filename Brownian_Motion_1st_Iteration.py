@@ -255,7 +255,7 @@ for i, ticker in enumerate(tickers):
 
     # --- BACKTEST ---
     result = backtest(ticker, closes, spy_closes, backtest_multiplier,
-                      BACKTEST_YEARS, T, n, M, cursor, conn, today)
+                      BACKTEST_YEARS, M, cursor, conn, today)
     portfolio_pnl += result["total_pnl"]
     portfolio_invested += result["total_invested"]
     portfolio_traded_returns.extend(result["traded_returns"])

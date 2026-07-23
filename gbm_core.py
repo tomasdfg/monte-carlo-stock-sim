@@ -21,6 +21,11 @@ import yfinance as yf
 # forward projection always uses the latest close.
 DATA_START = "2016-01-01"
 
+# trading days in a one-year horizon. The bootstrap simulates a year by drawing
+# this many daily returns; the GBM path count (n) is an abstract discretization
+# and is not the right horizon for resampling real daily returns.
+TRADING_DAYS = 252
+
 
 # define a function that states how much to put in for each trade
 def position_size(probability):
@@ -95,12 +100,28 @@ def run_monte_carlo(S0, mu, sigma, T, n, M):
     return S0 * steps.cumprod(axis=0)
 
 
-def backtest(ticker, closes, spy_closes, backtest_multiplier, years, T, n, M,
+def bootstrap_paths(S0, daily_log_returns, n_days, M):
+    """Simulate M price paths over n_days by resampling actual historical daily
+    log returns with replacement (a bootstrap), instead of drawing Gaussian shocks.
+
+    The empirical distribution carries the real drift, volatility, skew and fat
+    tails of the input returns, so crash days and other extremes appear at their
+    true historical frequency rather than being assumed away by a bell curve.
+    Because we resample log returns directly, they sum in log space with no Ito
+    -sigma^2/2 correction. Returns the (n_days+1, M) price array."""
+    r = np.asarray(daily_log_returns, dtype=float)
+    r = r[~np.isnan(r)]
+    sampled = np.random.choice(r, size=(n_days, M), replace=True)
+    log_paths = np.vstack([np.zeros(M), sampled.cumsum(axis=0)])
+    return S0 * np.exp(log_paths)
+
+
+def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
              cursor=None, conn=None, today=None, verbose=True):
-    """Walk each backtest year: train mu/sigma on the trailing window, simulate,
-    size a trade when the signal fires, and record the realized outcome under the
-    symmetric take-profit/stop-loss rule. Returns the tallies the caller needs for
-    the Sharpe ratios and the portfolio summary.
+    """Walk each backtest year: bootstrap the trailing window's daily returns to
+    simulate the year, size a trade when the signal fires, and record the realized
+    outcome under the symmetric take-profit/stop-loss rule. Returns the tallies the
+    caller needs for the Sharpe ratios and the portfolio summary.
 
     Set verbose=False for a quiet run (the multi-seed sweep), and leave cursor as
     None to skip the per-year database writes.
@@ -121,25 +142,20 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, T, n, M,
     for year in years:
         training_data = closes[f"{year-2}-01-01":f"{year}-01-01"]
         actual_data = closes[f"{year}-01-01":f"{year+1}-01-01"]
-        # calc MU and SIGMA from the training window only
+        # this window's daily log returns are the bootstrap source. Their mean is
+        # the training-window historical drift (the Phase 2 de-leaked, no-look-ahead
+        # drift), and resampling them keeps the window's real volatility, skew and
+        # fat tails instead of assuming a normal. The forward projection still uses
+        # the parametric blended-mu GBM.
         log_returns_t = np.log(training_data / training_data.shift(1))
-        mu_annual_t = log_returns_t.mean() * 252
-        sigma_annual_t = log_returns_t.std() * np.sqrt(252)
-        # drift: training-window historical mu ONLY. Today's analyst-implied return
-        # and today's CAPM expected_return are unknowable at the backtest date, so
-        # blending them in leaks future information (Phase 2 de-leak). The forward
-        # projection still uses the full blend.
-        mu_t = float(mu_annual_t)
-        # volatility
-        sigma_t = float(sigma_annual_t)
         # calculate Moving Averages and Signal MA
         ma_50_t = training_data.rolling(50).mean()
         ma_200_t = training_data.rolling(200).mean()
         ma_signal_t = "BUY" if ma_50_t.iloc[-1] > ma_200_t.iloc[-1] else "AVOID"
         # get starting price for year:
         Starting_Price_t = float(actual_data.iloc[0])
-        # run Monte Carlo Sim for this year
-        St_t = run_monte_carlo(Starting_Price_t, mu_t, sigma_t, T, n, M)
+        # simulate the year by bootstrapping TRADING_DAYS daily returns
+        St_t = bootstrap_paths(Starting_Price_t, log_returns_t, TRADING_DAYS, M)
         final_prices_t = St_t[-1]
         # probability that price will be above the starting price
         probability_t = (final_prices_t > Starting_Price_t).mean()

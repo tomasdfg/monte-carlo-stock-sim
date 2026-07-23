@@ -65,7 +65,7 @@ def run_one_seed(seed, all_closes, spy_closes, backtest_multiplier):
         # up with the committed single-seed run (the values are discarded)
         np.random.normal(0, np.sqrt(T / n), size=(M, n))
         result = backtest(ticker, all_closes[ticker], spy_closes,
-                          backtest_multiplier, BACKTEST_YEARS, T, n, M,
+                          backtest_multiplier, BACKTEST_YEARS, M,
                           verbose=False)
         port_correct += result["correct"]
         port_total += result["total"]
