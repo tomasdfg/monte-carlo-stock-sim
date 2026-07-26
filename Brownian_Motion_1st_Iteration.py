@@ -118,7 +118,10 @@ for ticker in tickers:
     # keep the single-column DataFrame just for the log-returns dump below, but
     # store the squeezed Series so the rest of the script works with a plain
     # Series and the .iloc[-1].iloc[0] double-indexing chains disappear.
-    closes = data["Close"]
+    # drop any NaN rows (e.g. a trailing incomplete trading day yfinance sometimes
+    # appends) so the last close - used as S0 for the forward projection - is a
+    # real price rather than NaN.
+    closes = data["Close"].dropna()
     log_returns = np.log(closes / closes.shift(1))
     print(log_returns)
     all_returns[ticker] = log_returns.squeeze()
@@ -162,7 +165,7 @@ for year in BACKTEST_YEARS:
 
 # collecting data from "SPY" for golden cross and evil cross for better probability estimation
 spy_data = load_prices("SPY")
-spy_closes = spy_data["Close"].squeeze()
+spy_closes = spy_data["Close"].dropna().squeeze()
 
 # set dictionaries of probability things for the visualizer
 S0 = {}
@@ -174,6 +177,9 @@ p95 = {}
 # per-ticker historical drift/vol, collected for the correlated portfolio sim
 hist_mu = {}
 hist_sigma = {}
+# per-ticker probabilities, collected to annotate the Plotly chart
+prob_gain = {}
+prob_20 = {}
 
 # risk-free rate from the 10-year Treasury yield. It is not ticker-specific, so
 # fetch it once here rather than re-fetching the identical value every iteration.
@@ -253,6 +259,8 @@ for i, ticker in enumerate(tickers):
     print(f"Probability of over ${ticker_target:.2f} (+{PRICE_TARGET_PCT:.0%}): {probability2}")
     probability3 = (final_prices > 1.2 * S0[ticker]).mean()
     print(f"Probability of final price over 20% gain: {probability3}")
+    prob_gain[ticker] = probability
+    prob_20[ticker] = probability3
 
     # insert fundamentals into database, clearing today's prior row so repeated runs
     # on the same day overwrite instead of piling up duplicates
@@ -330,7 +338,7 @@ for i, ticker in enumerate(tickers):
             bbox=dict(boxstyle='round', facecolor='black', alpha=0.5))
     axes[i].legend(loc='lower right')
 
-PLV.plot_simulation(tickers, time, median, p5, p25, p75, p95, S0, T)
+PLV.plot_simulation(tickers, time, median, p5, p25, p75, p95, S0, prob_gain, prob_20, T)
 
 print(f"\n{'='*40}")
 print(f"PORTFOLIO SUMMARY")
