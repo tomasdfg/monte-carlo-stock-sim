@@ -217,8 +217,11 @@ with backtest_tab:
     stored = read_backtest_results()
     st.subheader("Stored results (SQLite)")
     if stored is None or stored.empty:
-        st.warning("No rows in data/market_data.db yet. Run "
-                   "`python3 Brownian_Motion_1st_Iteration.py` to populate it.")
+        st.warning(
+            "No stored results yet - data/market_data.db is not present. It is "
+            "written by `python3 Brownian_Motion_1st_Iteration.py` locally, and is "
+            "gitignored, so a fresh deploy starts without it. Use the live re-run "
+            "below, which computes the same numbers on demand.")
     else:
         runs = sorted(stored["today"].unique(), reverse=True)
         chosen_run = st.selectbox("Run date", runs, index=0)

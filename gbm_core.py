@@ -21,6 +21,10 @@ import yfinance as yf
 # forward projection always uses the latest close.
 DATA_START = "2010-01-01"
 
+# where the CSV price cache and the SQLite database live. Gitignored, so it does
+# not exist in a fresh clone and has to be created on demand.
+DATA_DIR = "data"
+
 # trading days in a one-year horizon. The bootstrap simulates a year by drawing
 # this many daily returns; the GBM path count (n) is an abstract discretization
 # and is not the right horizon for resampling real daily returns.
@@ -104,7 +108,7 @@ def load_prices(ticker):
     """Load a ticker's price history from its cached CSV when the cache is less
     than a day old, otherwise re-download it and refresh the cache. This caching
     block used to be copied out for the ticker loop and again for SPY."""
-    path = f"data/{ticker}_data.csv"
+    path = os.path.join(DATA_DIR, f"{ticker}_data.csv")
     if os.path.exists(path):
         file_age = datetime.today() - datetime.fromtimestamp(os.path.getmtime(path))
     else:
@@ -113,6 +117,9 @@ def load_prices(ticker):
     if file_age is not None and file_age.days < 1:
         return pd.read_csv(path, index_col=0, header=[0, 1])
     data = yf.download(ticker, start=DATA_START, auto_adjust=True)
+    # data/ is gitignored, so it is absent on a fresh clone (e.g. a Streamlit Cloud
+    # deploy). Create it here rather than relying on the chart script having run.
+    os.makedirs(DATA_DIR, exist_ok=True)
     data.to_csv(path)
     return data
 
