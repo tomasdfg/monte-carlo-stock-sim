@@ -208,6 +208,9 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
     traded_returns = []
     # same, but every backtest year, with no-trade years carried as a flat 0.0
     all_year_returns = []
+    # per-year prediction detail, so a caller can render a year-by-year view
+    # (e.g. the dashboard's accuracy grid) without re-deriving any of it
+    yearly_detail = []
     # per-year dollar P&L and capital deployed (0.0 in no-trade years), so the
     # caller can build a capital-weighted portfolio equity curve for drawdown
     yearly_pnl = []
@@ -241,6 +244,9 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
         spy_ma_50_t = spy_training_data.rolling(50).mean()
         spy_ma_200_t = spy_training_data.rolling(200).mean()
         threshold = 0.8 if spy_ma_200_t.iloc[-1] > spy_ma_50_t.iloc[-1] else 0.63
+        # recorded in yearly_detail below; overwritten when a trade actually fires
+        traded_this_year = False
+        exit_reason_this_year = None
         # probabilty and buy signal
         if (probability_t > threshold) and (ma_signal_t == 'BUY'):
             if verbose:
@@ -283,6 +289,8 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
             total_pnl += profit_loss
             total_invested += investment
             total_cost += trade_cost
+            traded_this_year = True
+            exit_reason_this_year = exit_reason
             if verbose:
                 print(f"{year}: Investment=${investment:.2f}, P&L=${profit_loss:.2f}, "
                       f"Net return={net_return:.1%} (gross {realized_return:.1%}, cost ${trade_cost:.2f})")
@@ -298,6 +306,16 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
         predicted_direction = "UP" if probability_t > 0.5 else "DOWN"
         actual_direction = "UP" if actual_return > 0 else "DOWN"
         is_correct = 1 if predicted_direction == actual_direction else 0
+        yearly_detail.append({
+            "ticker": ticker,
+            "year": year,
+            "predicted": predicted_direction,
+            "actual": actual_direction,
+            "probability": float(probability_t),
+            "correct": is_correct,
+            "traded": bool(traded_this_year),
+            "exit": exit_reason_this_year,
+        })
         if verbose:
             print(f"{year}: P(gain)={probability_t:.0%}, Predicted={predicted_direction}, Actual={actual_direction}")
         # credit any correct call, not just correct UP calls
@@ -334,5 +352,6 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
         "all_year_returns": all_year_returns,
         "yearly_pnl": yearly_pnl,
         "yearly_invested": yearly_invested,
+        "yearly_detail": yearly_detail,
         "p_gain_hold": p_gain_hold,
     }

@@ -82,6 +82,29 @@ def prepare_backtest_inputs():
     return closes, load_closes("SPY"), multiplier, list(years), returns_df
 
 
+@st.cache_data(show_spinner="Running the walk-forward backtest for every ticker...")
+def run_all_backtests(seed, M, n, T):
+    """Backtest every ticker under one seed and return the per-year detail plus a
+    per-ticker summary. Cheap (well under a second for all five), so the accuracy
+    grid can be computed live instead of depending on a database that a fresh
+    deploy does not have.
+
+    Consumes one throwaway forward-simulation draw per ticker so the RNG stream
+    lines up with the chart script, which simulates then backtests each ticker in
+    turn - that keeps these numbers equal to the stored/committed run.
+    """
+    all_closes, spy_closes, multiplier, years, _ = prepare_backtest_inputs()
+    np.random.seed(int(seed))
+    detail, summary = [], {}
+    for t in TICKERS:
+        np.random.normal(0, np.sqrt(T / n), size=(M, n))
+        res = backtest(t, all_closes[t], spy_closes, multiplier, years, M,
+                       verbose=False)
+        detail.extend(res["yearly_detail"])
+        summary[t] = res
+    return pd.DataFrame(detail), summary, years
+
+
 @st.cache_data(show_spinner=False)
 def read_backtest_results():
     """Stored backtest rows, read-only so the dashboard can never corrupt the DB
@@ -214,14 +237,55 @@ with backtest_tab:
             "The drift-blend sliders intentionally do not apply here - the backtest "
             "may only use information available at each historical date.")
 
+    # --- live accuracy grid: computed on the fly for every ticker, so it is here
+    # whether or not a SQLite database exists (a fresh deploy has none) ---
+    detail_df, summary, bt_years = run_all_backtests(int(seed), M, n, T)
+
+    st.subheader("Accuracy by ticker and year")
+    st.caption(f"Green = the direction call for that year was right, red = wrong. "
+               f"Computed live for seed {int(seed)}, M={M}, {bt_years[0]}-{bt_years[-1]}.")
+    grid = detail_df.pivot(index="ticker", columns="year", values="correct")
+    st.dataframe(grid.style.background_gradient(cmap="RdYlGn", vmin=0, vmax=1)
+                 .format("{:.0f}"), width='stretch')
+
+    hits, cells = int(detail_df["correct"].sum()), len(detail_df)
+    g1, g2, g3 = st.columns(3)
+    g1.metric("Overall accuracy", f"{hits}/{cells}", delta=f"{hits / cells:.0%}")
+    worst_year = detail_df.groupby("year")["correct"].mean().idxmin()
+    g2.metric("Worst year", str(worst_year),
+              delta=f"{detail_df[detail_df['year'] == worst_year]['correct'].mean():.0%}",
+              delta_color="inverse")
+    g3.metric("Trades placed", int(detail_df["traded"].sum()))
+
+    st.subheader("Per-ticker summary")
+    st.dataframe(pd.DataFrame([{
+        "ticker": t,
+        "accuracy": f"{summary[t]['correct']}/{summary[t]['total']}",
+        "return": (f"{summary[t]['total_pnl'] / summary[t]['total_invested']:.1%}"
+                   if summary[t]["total_invested"] else "n/a"),
+        "win rate": ("n/a" if win_rate(summary[t]["traded_returns"]) is None
+                     else f"{win_rate(summary[t]['traded_returns']):.0%}"),
+        "max drawdown": f"{max_drawdown(summary[t]['all_year_returns']):.1%}",
+        "sharpe (traded)": f"{sharpe_ratio(summary[t]['traded_returns'], risk_free_rate):.2f}",
+        "buy & hold": f"{summary[t]['p_gain_hold']:.0%}",
+    } for t in TICKERS]), hide_index=True, width='stretch')
+
+    with st.expander(f"Year-by-year detail for {ticker}"):
+        st.dataframe(
+            detail_df[detail_df["ticker"] == ticker]
+            .assign(probability=lambda d: d["probability"].map("{:.1%}".format))
+            .drop(columns=["ticker"]),
+            hide_index=True, width='stretch')
+
+    # --- stored results, when a database happens to be present ---
     stored = read_backtest_results()
     st.subheader("Stored results (SQLite)")
     if stored is None or stored.empty:
-        st.warning(
-            "No stored results yet - data/market_data.db is not present. It is "
-            "written by `python3 Brownian_Motion_1st_Iteration.py` locally, and is "
-            "gitignored, so a fresh deploy starts without it. Use the live re-run "
-            "below, which computes the same numbers on demand.")
+        st.info(
+            "No database found - data/market_data.db is written by "
+            "`python3 Brownian_Motion_1st_Iteration.py` and is gitignored, so a "
+            "fresh deploy starts without it. Everything above is computed live and "
+            "needs no database.")
     else:
         runs = sorted(stored["today"].unique(), reverse=True)
         chosen_run = st.selectbox("Run date", runs, index=0)
@@ -243,12 +307,8 @@ with backtest_tab:
                                   "actual_direction": "actual",
                                   "is_correct": "correct"}),
             hide_index=True, width='stretch')
-
-        st.subheader("Accuracy by ticker and year")
-        pivot = run_rows.pivot_table(index="ticker", columns="year",
-                                     values="is_correct", aggfunc="max")
-        st.dataframe(pivot.style.background_gradient(cmap="RdYlGn", vmin=0, vmax=1)
-                     .format("{:.0f}"), width='stretch')
+        st.caption("These are rows the chart script previously wrote. The grid at "
+                   "the top of this tab is the live equivalent.")
 
     st.subheader("Re-run the backtest live")
     st.caption("Uses the same gbm_core.backtest the chart script and robustness "
