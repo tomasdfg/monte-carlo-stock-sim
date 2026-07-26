@@ -35,6 +35,11 @@ TRADING_DAYS = 252
 TRAINING_YEARS = 2
 WINDOW_MODE = "rolling"
 
+# transaction cost / slippage charged per round-trip trade, as a fraction of the
+# notional. 0.001 = a flat 0.1% per trade (a deliberately conservative one-sided
+# figure; double it to model paying on both the entry and the exit).
+TRANSACTION_COST = 0.001
+
 
 def train_start_year(test_year):
     """First calendar year of the training window for a given test year, honoring
@@ -191,6 +196,7 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
     total = 0
     total_pnl = 0
     total_invested = 0
+    total_cost = 0.0
     # realized return of each year we actually traded
     traded_returns = []
     # same, but every backtest year, with no-trade years carried as a flat 0.0
@@ -258,16 +264,21 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
             else:
                 exit_reason = "year-end"
                 realized_return = actual_return / Starting_Price_t
-            # calculate profit/loss in dollars
-            profit_loss = investment * realized_return
-            traded_returns.append(realized_return)
-            all_year_returns.append(realized_return)
+            # charge the round-trip transaction cost against the trade: a marginal
+            # winner can net negative once trading costs are paid.
+            trade_cost = investment * TRANSACTION_COST
+            net_return = realized_return - TRANSACTION_COST
+            profit_loss = investment * net_return
+            traded_returns.append(net_return)
+            all_year_returns.append(net_return)
             yearly_pnl.append(profit_loss)
             yearly_invested.append(investment)
             total_pnl += profit_loss
             total_invested += investment
+            total_cost += trade_cost
             if verbose:
-                print(f"{year}: Investment=${investment:.2f}, P&L=${profit_loss:.2f}, Return={realized_return:.1%}")
+                print(f"{year}: Investment=${investment:.2f}, P&L=${profit_loss:.2f}, "
+                      f"Net return={net_return:.1%} (gross {realized_return:.1%}, cost ${trade_cost:.2f})")
                 print(f"Exit: {exit_reason}")
         else:
             if verbose:
@@ -311,6 +322,7 @@ def backtest(ticker, closes, spy_closes, backtest_multiplier, years, M,
         "total": total,
         "total_pnl": total_pnl,
         "total_invested": total_invested,
+        "total_cost": total_cost,
         "traded_returns": traded_returns,
         "all_year_returns": all_year_returns,
         "yearly_pnl": yearly_pnl,

@@ -10,7 +10,7 @@ import plotly_viz as PLV
 from gbm_core import (load_prices, run_monte_carlo, backtest, sharpe_ratio,
                       win_rate, max_drawdown, simulate_correlated_portfolio,
                       train_start_year, backtest_years,
-                      DATA_START, TRAINING_YEARS, WINDOW_MODE)
+                      DATA_START, TRAINING_YEARS, WINDOW_MODE, TRANSACTION_COST)
 
 # --- SETTINGS ---
 tickers = ["AAPL", "NVDA", "AMZN", "MSFT", "GLD"]
@@ -182,6 +182,7 @@ risk_free_rate = treasury.info['previousClose'] / 100
 
 portfolio_pnl = 0
 portfolio_invested = 0
+portfolio_cost = 0.0
 # collected across tickers for the portfolio-level benchmark metrics
 portfolio_traded_returns = []
 portfolio_yearly_pnl = [0.0] * len(BACKTEST_YEARS)
@@ -271,6 +272,7 @@ for i, ticker in enumerate(tickers):
                       BACKTEST_YEARS, M, cursor, conn, today)
     portfolio_pnl += result["total_pnl"]
     portfolio_invested += result["total_invested"]
+    portfolio_cost += result["total_cost"]
     portfolio_traded_returns.extend(result["traded_returns"])
     for y in range(len(BACKTEST_YEARS)):
         portfolio_yearly_pnl[y] += result["yearly_pnl"][y]
@@ -335,7 +337,11 @@ print(f"PORTFOLIO SUMMARY")
 print(f"{'='*40}")
 print(f"Total invested across all tickers: ${portfolio_invested}")
 print(f"Total P&L across all tickers: ${portfolio_pnl:.2f}")
-print(f"Total portfolio return: {(portfolio_pnl / portfolio_invested) * 100:.1f}%" if portfolio_invested > 0 else "No trades")
+# gross return would be the net P&L plus the costs already deducted from it
+gross_return = (portfolio_pnl + portfolio_cost) / portfolio_invested if portfolio_invested > 0 else 0.0
+print(f"Transaction costs paid ({TRANSACTION_COST:.1%}/trade): ${portfolio_cost:.2f}")
+print(f"Portfolio return before costs: {gross_return * 100:.1f}%" if portfolio_invested > 0 else "No trades")
+print(f"Total portfolio return (net of costs): {(portfolio_pnl / portfolio_invested) * 100:.1f}%" if portfolio_invested > 0 else "No trades")
 
 # --- BENCHMARK & RISK METRICS ---
 # capital-weighted portfolio return per backtest year -> compounded equity curve
